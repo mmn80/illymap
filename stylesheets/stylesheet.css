@@ -49,3 +49,13 @@ footer a:hover {
   color: #43adff;
   text-shadow: #0090ff 0px 0px 2px;
 }
+
+#jsondiv {
+  display: none;
+  position: absolute;
+  left: 100px;
+  top: 200px;
+  width: 800px;
+  height: 800px;
+  overflow: auto;
+}
