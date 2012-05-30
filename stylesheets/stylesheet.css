@@ -17,11 +17,11 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 h1 {
-  font-size: 32px;
+  font-size: 34px;
 }
 
 h2 {
-  font-size: 20px;
+  font-size: 22px;
 }
 
 p {
@@ -45,7 +45,7 @@ a {
   -ms-transition: text-shadow 0.5s ease;
 }
 
-footer a:hover {
+a:hover {
   color: #43adff;
   text-shadow: #0090ff 0px 0px 2px;
 }
@@ -58,4 +58,28 @@ footer a:hover {
   width: 800px;
   height: 800px;
   overflow: auto;
+}
+
+header {
+  display: block;
+}
+
+#header_left, #header_right {
+  display: inline-block;
+  height: 100%;
+}
+
+#header_right {
+  margin-left: 50px;
+  border: 1px solid #CCCCCC;
+  padding: 4px;
+  vertical-align: top;
+}
+
+.ui_panel {
+  font-size: 12px;
+  display: inline-block;
+  height: 100%;
+  vertical-align: top;
+  padding-right: 20px;
 }

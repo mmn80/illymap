@@ -12,13 +12,23 @@
 
   <body>
     <header>
-      <h1>Illymap</h1>
-      <h2>Illyriad Alliance Influence Map</h2>
-      <a href="#" onclick="loadXml()">XML2JSON</a>
+      <div id="header_left">
+        <h1>Illymap</h1>
+        <h2>Illyriad Alliance Influence Map</h2>
+      </div>
+      <div id="header_right">
+        <form name="ui_form">
+          <div class="ui_panel" id="server_info">server:?<br/>date:?</div>
+          <div class="ui_panel">
+            <input id="show_towns" type="checkbox" /><label for="show_towns">Show Towns</label>
+          </div>
+          <div class="ui_panel"><a id="xml2json_btn" href="#">XML2JSON</a></div>
+        </form>
+      </div>
     </header>
 
     <section id="main_content">
-      <canvas id="map" width="1000" height="1000"></canvas>
+      <canvas id="map" width="1000" height="1100"></canvas>
       <div id="jsondiv"></div>
     </section>
 
