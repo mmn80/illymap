@@ -20,9 +20,9 @@
         <form name="ui_form">
           <div class="ui_panel" id="server_info">server:?<br/>date:?</div>
           <div class="ui_panel">
-            <input id="show_towns" type="checkbox" /><label for="show_towns">Show Towns</label>
+            <input id="show_towns" type="checkbox" /><label for="show_towns" class="tooltip" data-tooltip="Show towns and alliance capitals. Mouse over alliance capitals (in yellow) to see more information.">Show Towns</label>
           </div>
-          <div class="ui_panel"><a id="xml2json_btn" href="#">XML2JSON</a></div>
+          <div class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data actually used by the app. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
         </form>
       </div>
     </header>
