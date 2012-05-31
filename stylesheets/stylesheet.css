@@ -103,3 +103,12 @@ header {
   opacity: 1;
   visibility: visible;
 }
+
+#overlay_mode_label, #std_dev_label {
+  display: inline-block;
+  width: 80px;
+}
+
+select {
+  width: 100px;
+}

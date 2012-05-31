@@ -20,6 +20,25 @@
         <form name="ui_form">
           <div class="ui_panel" id="server_info">server:?<br/>date:?</div>
           <div class="ui_panel">
+            <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode.">Map Overlay:</label>
+            <select id="overlay_mode">
+              <option value="none" selected="selected">None</option>
+              <option value="pop">Population Density</option>
+              <option value="pop:e">Population Density: Elves</option>
+              <option value="pop:h">Population Density: Humans</option>
+              <option value="pop:d">Population Density: Dwarves</option>
+              <option value="pop:o">Population Density: Orcs</option>
+            </select><br />
+            <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays.">Std. Dev.:</label>
+            <select id="std_dev">
+              <option value="1">1</option>
+              <option value="5">5</option>
+              <option value="10" selected="selected">10</option>
+              <option value="15">15</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div class="ui_panel">
             <input id="show_towns" type="checkbox" /><label for="show_towns" class="tooltip" data-tooltip="Show towns as blue dots on the map.">Show Towns</label><br />
             <input id="show_capitals" type="checkbox" /><label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow blobs. Mouse over to see more information.">Show Capitals</label>
           </div>

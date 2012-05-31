@@ -2,6 +2,7 @@
 
 var TOWNS_XML = "data/datafile_towns.xml";
 var ALLIANCES_XML = "data/datafile_alliances";
+var SQRT2PI = Math.sqrt(2 * Math.PI);
 
 var data = { server: "", date: "", alliances: [], towns: [] };
 var bg_img = new Image();
@@ -11,6 +12,12 @@ var map_state = {
   my: 0, //mousey
   sel_cap: null //selected alliance capital
 };
+var overlay = {
+  std_dev: 10,  //standard deviation (UI)
+  mode: "none", //overlay mode (UI)
+  buffers: [],  //map overlays as 1000x1000 int32 arraybuffers, values represent populations
+  kernels: []   //precomputed gaussian distributions of form { std_dev: val, width: kernel_width, kernel: float32_array_buffer }
+}
 
 $(document).ready(function () {
   var img_loaded = false, data_loaded = false;
@@ -20,6 +27,8 @@ $(document).ready(function () {
   };
   $("#show_towns").click(paint);
   $("#show_capitals").click(paint);
+  $("#overlay_mode").change(recompute_overlay);
+  $("#std_dev").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
   $("#map").mousemove(map_mousemove);
   bg_img.src="images/region_faction_map.gif";
@@ -52,6 +61,35 @@ function initialize() {
   capitals.sort(function(a, b) {
     return a.p - b.p;
   });
+  paint();
+}
+
+function recompute_overlay() {
+  overlay.std_dev = parseInt($("#std_dev").val());
+  overlay.mode = $("#overlay_mode").val();
+  
+  // search for cached Gaussian kernel
+  
+  var kernel = null;
+  for (var i=0; i<overlay.kernels.length; i++)
+    if (overlay.kernels[i].std_dev == overlay.std_dev) {
+      kernel = overlay.kernels[i];
+      break;
+    }
+  if (!kernel) {
+    
+    // compute kernel
+    
+    kernel = { std_dev: overlay.std_dev };
+    var half = 3 * kernel.std_dev; // 3*sigma coverage => less then 0.5% loss
+    kernel.width = 1 + 2 * half;   // add 1 so that there is a (0,0) pixel in the middle
+    kernel.buffer = new Float32Array(new ArrayBuffer(4 * kernel.width * kernel.width));
+    var factor1 = 2 * Math.pow(kernel.std_dev, 2), factor2 = Math.PI * factor1;
+    for (var y=0; y<kernel.width; y++)
+      for (var x=0; x<kernel.width; x++)
+        kernel.buffer[y * kernel.width + x] = Math.exp(-(Math.pow(x-half, 2) + Math.pow(y-half, 2)) / factor1) / factor2;
+    overlay.kernels.push(kernel);
+  }
   paint();
 }
 
