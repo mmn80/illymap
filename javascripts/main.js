@@ -1,7 +1,7 @@
 //"use strict";
 
 var TOWNS_XML = "data/datafile_towns.xml";
-var ALLIANCES_XML = "data/datafile_alliances";
+var ALLIANCES_XML = "data/datafile_alliances.xml";
 var BG_IMAGE = "images/region_faction_map.png";
 var MAP_WIDTH = 1000;
 
@@ -13,6 +13,7 @@ var map_state = {
   my: 0, //mousey
   sel_cap: null //selected alliance capital
 };
+
 var overlay = {
   std_dev: 5,     //standard deviation (UI)
   mode: "none",   //overlay mode (UI)
@@ -74,9 +75,9 @@ function initialize() {
 function recompute_overlay() {
   overlay.std_dev = parseInt($("#std_dev").val());
   overlay.mode = $("#overlay_mode").val();
-  
+
   // search for cached Gaussian kernel
-  
+
   var kernel = null;
   for (var i=0; i<overlay.kernels.length; i++)
     if (overlay.kernels[i].std_dev == overlay.std_dev) {
@@ -97,21 +98,21 @@ function recompute_overlay() {
         kernel.buffer[y * kernel.width + x] = Math.exp(-(Math.pow(x-half, 2) + Math.pow(y-half, 2)) / factor1) / factor2;
     overlay.kernels.push(kernel);
   }
-  
+
   // compute density buffers
 
   if (overlay.mode.substring(0, 3) == "pop") {
     compute_density(kernel);
-    
+
     // compute rgb buffer
-  
+
     overlay.rgb = new ArrayBuffer(3 * MAP_WIDTH * MAP_WIDTH);
     for (var i=0; i<overlay.density.length; i++)
       val2rgb(overlay.density[i], i * 3);
   }
-  
+
   // paint
-  
+
   paint();
 }
 
@@ -177,9 +178,9 @@ function compute_density(kernel) {
 
 function paint() {
   var ctx = $("#map")[0].getContext("2d");
-  
+
   //clear canvas or paint background image
-  
+
   if ($("#show_map").is(':checked')) {
     ctx.drawImage(bg_img, 0, 0, MAP_WIDTH, MAP_WIDTH);
     if (overlay.mode == "none") {
@@ -192,11 +193,11 @@ function paint() {
     }
   }
   else ctx.clearRect(0, 0, MAP_WIDTH, MAP_WIDTH);
-  
+
   var imgd = ctx.getImageData(0, 0, MAP_WIDTH, MAP_WIDTH);
-  
+
   //paint overlays
-  
+
   if (overlay.mode.substring(0, 3) == "pop") {
       var alpha = 0.5, len = overlay.rgb.byteLength / 3;
       if (!$("#show_map").is(':checked')) alpha = 0;
@@ -208,9 +209,9 @@ function paint() {
         imgd.data[idx + 3] = 255;
       }
   }
-  
+
   //paint towns
-  
+
   if ($("#show_towns").is(':checked'))
     for (var i=0; i<data.towns.length; i++) {
       var town = data.towns[i];
@@ -222,11 +223,11 @@ function paint() {
         imgd.data[idx + 3] = 255;
       }
     }
-    
+
   ctx.putImageData(imgd, 0, 0);
-  
+
   //paint capitals
-  
+
   if ($("#show_capitals").is(':checked'))
     for (var i=0; i<capitals.length; i++) {
       var town = capitals[i];
@@ -240,9 +241,9 @@ function paint() {
       ctx.arc(town.x1, town.y1, r, 0, Math.PI*2, false);
       ctx.fill();
     }
-    
+
   //paint selected capital infobox
-  
+
   if (map_state.sel_cap)
     info_box(ctx, map_state.sel_cap.x1 + 20, map_state.sel_cap.y1 - 10, [
       { text: map_state.sel_cap.name, italic: true },
@@ -273,9 +274,9 @@ function map_mousemove(event) {
 
 function info_box(ctx, x, y, lines) {
   var w = 0, h = 0, r = 4;
-  
+
   //complete line info with defaults & compute bounds
-  
+
   for (var i=0; i<lines.length; i++) {
     var l = lines[i];
     if (l.font === undefined) l.font = "Calibri";
@@ -290,16 +291,16 @@ function info_box(ctx, x, y, lines) {
   }
   w += 2 * r;
   h += 2 * r;
-  
+
   //fix position
-  
+
   if (x > MAP_WIDTH - w) x = MAP_WIDTH - w;
   if (y > MAP_WIDTH - h) y = MAP_WIDTH - h;
   if (y < 0) y = 0;
   if (x < 0) x = 0;
-  
+
   //draw box
-  
+
   ctx.globalAlpha = 0.4;
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -314,9 +315,9 @@ function info_box(ctx, x, y, lines) {
   ctx.closePath();
   ctx.fillStyle = "yellow";
   ctx.fill();
-  
+
   //draw text
-  
+
   ctx.globalAlpha = 1;
   var text_y = y + r / 2, text_x = x + r;
   ctx.fillStyle = "white";
@@ -331,14 +332,14 @@ function info_box(ctx, x, y, lines) {
 function loadXml() {
   var al_loaded = false, to_loaded = false;
   var data = { server: "", date: "", alliances: [], towns: [] };
-  
+
   var generateJson = function() {
     var div = $("#jsondiv");
     var json_text = JSON.stringify(data, null, 2);
     div.show();
     div.append(json_text);
   }
-  
+
   $.ajax({
     type: "GET",
     url: ALLIANCES_XML,
@@ -366,7 +367,7 @@ function loadXml() {
       if (to_loaded) generateJson();
     }
   });
-  
+
   $.ajax({
     type: "GET",
     url: TOWNS_XML,

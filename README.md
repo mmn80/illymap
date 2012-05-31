@@ -1,4 +1,4 @@
 illymap
 =======
 
-Illyriad Alliance Influence Map
+Illyriad Map Analytics
