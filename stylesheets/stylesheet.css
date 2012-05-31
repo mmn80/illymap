@@ -1,0 +1,114 @@
+body {
+  box-sizing: border-box;
+  color: #f2f2f2;
+  background: #212121;
+  font-size: 16px;
+  font-family: 'Myriad Pro', Calibri, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  margin: 10px;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 5px 0;
+  font-weight: 700;
+  font-family: 'Lucida Grande', 'Calibri', Helvetica, Arial, sans-serif;
+  letter-spacing: -1px;
+}
+
+h1 {
+  font-size: 34px;
+}
+
+h2 {
+  font-size: 22px;
+}
+
+p {
+  margin: 10px 0 15px 0;
+}
+
+a {
+  text-decoration: none;
+  color: #007edf;
+  text-shadow: none;
+
+  transition: color 0.5s ease;
+  transition: text-shadow 0.5s ease;
+  -webkit-transition: color 0.5s ease;
+  -webkit-transition: text-shadow 0.5s ease;
+  -moz-transition: color 0.5s ease;
+  -moz-transition: text-shadow 0.5s ease;
+  -o-transition: color 0.5s ease;
+  -o-transition: text-shadow 0.5s ease;
+  -ms-transition: color 0.5s ease;
+  -ms-transition: text-shadow 0.5s ease;
+}
+
+a:hover {
+  color: #43adff;
+  text-shadow: #0090ff 0px 0px 2px;
+}
+
+#jsondiv {
+  display: none;
+  position: absolute;
+  left: 100px;
+  top: 200px;
+  width: 800px;
+  height: 800px;
+  overflow: auto;
+}
+
+header {
+  display: block;
+}
+
+#header_left, #header_right {
+  display: inline-block;
+  height: 100%;
+}
+
+#header_right {
+  margin-left: 50px;
+  margin-top: 10px;
+  border: 1px solid #CCCCCC;
+  padding: 4px;
+  vertical-align: top;
+}
+
+.ui_panel {
+  font-size: 12px;
+  display: inline-block;
+  height: 100%;
+  vertical-align: top;
+  padding-right: 20px;
+}
+
+.tooltip::after {
+  background: rgba(199, 159, 0, 0.8);
+  border-radius: 8px 8px 8px 0px;
+  box-shadow: 1px 1px 10px rgba(0, 0, 0, 0.5);
+  color: #FFF;
+  content: attr(data-tooltip);
+  margin-top: -24px;
+  opacity: 0;
+  padding: 3px 7px;
+  position: absolute;
+  visibility: hidden;
+  transition: all 0.4s ease-in-out;
+}
+ 
+.tooltip:hover::after {
+  opacity: 1;
+  visibility: visible;
+}
+
+#overlay_mode_label, #std_dev_label {
+  display: inline-block;
+  width: 50px;
+}
+
+select {
+  width: 100px;
+}
