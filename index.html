@@ -3,7 +3,7 @@
   <head>
     <meta charset='utf-8' />
     <meta http-equiv="X-UA-Compatible" content="chrome=1" />
-    <meta name="description" content="Illymap : Illyriad Alliance Influence Map" />
+    <meta name="description" content="Illymap : Illyriad Map Analytics" />
     <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
     <script src="javascripts/jquery-1.7.2.min.js" type="text/javascript"></script>
     <script src="javascripts/main.js" type="text/javascript"></script>
@@ -14,35 +14,36 @@
     <header>
       <div id="header_left">
         <h1>Illymap</h1>
-        <h2>Illyriad Alliance Influence Map</h2>
+        <h2>Illyriad Map Analytics</h2>
       </div>
       <div id="header_right">
         <form name="ui_form">
           <div class="ui_panel" id="server_info">server:?<br/>date:?</div>
           <div class="ui_panel">
-            <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode.">Map Overlay:</label>
+            <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode.">Overlay:</label>
             <select id="overlay_mode">
               <option value="none" selected="selected">None</option>
-              <option value="pop">Population Density</option>
-              <option value="pop:e">Population Density: Elves</option>
-              <option value="pop:h">Population Density: Humans</option>
-              <option value="pop:d">Population Density: Dwarves</option>
-              <option value="pop:o">Population Density: Orcs</option>
+              <option value="pop">Population</option>
+              <option value="pop:E">Elves</option>
+              <option value="pop:H">Humans</option>
+              <option value="pop:D">Dwarves</option>
+              <option value="pop:O">Orcs</option>
             </select><br />
-            <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays.">Std. Dev.:</label>
+            <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays, but will also increase CPU time (quadratically). Note that the units are map-units, and this map is 2:1.">Sigma:</label>
             <select id="std_dev">
               <option value="1">1</option>
-              <option value="5">5</option>
-              <option value="10" selected="selected">10</option>
+              <option value="5" selected="selected">5</option>
+              <option value="10">10</option>
               <option value="15">15</option>
               <option value="20">20</option>
             </select>
           </div>
           <div class="ui_panel">
+            <input id="show_map" type="checkbox" checked="checked" /><label for="show_map" class="tooltip" data-tooltip="Show the background map.">Show Map</label><br />
             <input id="show_towns" type="checkbox" /><label for="show_towns" class="tooltip" data-tooltip="Show towns as blue dots on the map.">Show Towns</label><br />
-            <input id="show_capitals" type="checkbox" /><label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow blobs. Mouse over to see more information.">Show Capitals</label>
+            <input id="show_capitals" type="checkbox" checked="checked" /><label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow blobs. Mouse over them to see more information.">Show Capitals</label>
           </div>
-          <div class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data actually used by the app. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
+          <div class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. This is a static app, and can work locally on a computer (copy all files). To update the dataset: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
         </form>
       </div>
     </header>

@@ -106,7 +106,7 @@ header {
 
 #overlay_mode_label, #std_dev_label {
   display: inline-block;
-  width: 80px;
+  width: 50px;
 }
 
 select {

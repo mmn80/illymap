@@ -2,7 +2,7 @@
 
 var TOWNS_XML = "data/datafile_towns.xml";
 var ALLIANCES_XML = "data/datafile_alliances";
-var SQRT2PI = Math.sqrt(2 * Math.PI);
+var MAP_WIDTH = 1000;
 
 var data = { server: "", date: "", alliances: [], towns: [] };
 var bg_img = new Image();
@@ -13,10 +13,13 @@ var map_state = {
   sel_cap: null //selected alliance capital
 };
 var overlay = {
-  std_dev: 10,  //standard deviation (UI)
-  mode: "none", //overlay mode (UI)
-  buffers: [],  //map overlays as 1000x1000 int32 arraybuffers, values represent populations
-  kernels: []   //precomputed gaussian distributions of form { std_dev: val, width: kernel_width, kernel: float32_array_buffer }
+  std_dev: 5,     //standard deviation (UI)
+  mode: "none",   //overlay mode (UI)
+  rgb: null,      //overlay rgb arraybuffer; this is the end result of all overlay computations
+  density: null,  //MAP_WIDTHxMAP_WIDTH float32 arraybuffer, values represent populations; used for "pop. density" overlays
+  max_density: 0, //max value in the density matrix (used for normalization)
+  buffers: [],    //map overlay array buffers used for alliance calculations; each pixel contains both population, and allianceID; larger std dev will increase the chance for overlap and therefore the buffer count
+  kernels: []     //precomputed gaussian distributions of form { std_dev: val, width: kernel_width, kernel: float32_array_buffer }
 }
 
 $(document).ready(function () {
@@ -25,6 +28,7 @@ $(document).ready(function () {
     img_loaded = true;
     if (data_loaded) initialize();
   };
+  $("#show_map").click(paint);
   $("#show_towns").click(paint);
   $("#show_capitals").click(paint);
   $("#overlay_mode").change(recompute_overlay);
@@ -44,8 +48,10 @@ function initialize() {
   capitals = [];
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
-    town.x1 = Math.round((town.x + 1000) / 2);
-    town.y1 = -Math.round((town.y + 1000) / 2) + 1000;
+    town.x1 = Math.round((town.x + MAP_WIDTH) / 2);
+    town.y1 = -Math.round((town.y + MAP_WIDTH) / 2) + MAP_WIDTH;
+    if (town.r === undefined)
+      town.r = "H";
     if (town.c == 1) {
       town.alliance = "?";
       for (var j=0; j<data.alliances.length; j++) {
@@ -76,10 +82,10 @@ function recompute_overlay() {
       kernel = overlay.kernels[i];
       break;
     }
+
+  // compute kernel
+
   if (!kernel) {
-    
-    // compute kernel
-    
     kernel = { std_dev: overlay.std_dev };
     var half = 3 * kernel.std_dev; // 3*sigma coverage => less then 0.5% loss
     kernel.width = 1 + 2 * half;   // add 1 so that there is a (0,0) pixel in the middle
@@ -90,36 +96,132 @@ function recompute_overlay() {
         kernel.buffer[y * kernel.width + x] = Math.exp(-(Math.pow(x-half, 2) + Math.pow(y-half, 2)) / factor1) / factor2;
     overlay.kernels.push(kernel);
   }
+  
+  // compute density buffers
+
+  if (overlay.mode.substring(0, 3) == "pop") {
+    compute_density(kernel);
+    
+    // compute rgb buffer
+  
+    overlay.rgb = new ArrayBuffer(3 * MAP_WIDTH * MAP_WIDTH);
+    for (var i=0; i<overlay.density.length; i++)
+      val2rgb(overlay.density[i], i * 3);
+  }
+  
+  // paint
+  
   paint();
+}
+
+//snached from http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
+
+var gamma = 0.8;
+
+function val2rgb(val, idx) {
+  var factor = 0, r = 0, g = 0, b = 0;
+  var wavelen = 380 + 400 * val / overlay.max_density;
+  if (wavelen >= 380 && wavelen < 440) {
+    r = -(wavelen - 440) / 60;
+    b = 1;
+  }
+  else if (wavelen < 490) {
+    g = -(wavelen - 440) / 50;
+    b = 1;
+  }
+  else if (wavelen < 510) {
+    g = 1;
+    b = -(wavelen - 510) / 20;
+  }
+  else if (wavelen < 580) {
+    r = -(wavelen - 510) / 70;
+    g = 1;
+  }
+  else if (wavelen < 645) {
+    r = 1;
+    g = -(wavelen - 645) / 65;
+  }
+  else if (wavelen < 780)
+    r = 1;
+  if (wavelen >= 380 && wavelen < 420)
+    factor = 0.3 + 0.7 * (wavelen - 380) / 40;
+  else if (wavelen < 700)
+    factor = 1;
+  else if (wavelen < 780)
+    factor = 0.3 + 0.7 * (780 - wavelen) / 80;
+  if (r) overlay.rgb[idx] = Math.round(255 * Math.pow(r * factor, gamma));
+  if (g) overlay.rgb[idx + 1] = Math.round(255 * Math.pow(g * factor, gamma));
+  if (b) overlay.rgb[idx + 2] = Math.round(255 * Math.pow(b * factor, gamma));
+}
+
+function compute_density(kernel) {
+  overlay.density = new Float32Array(new ArrayBuffer(4 * MAP_WIDTH * MAP_WIDTH));
+  overlay.max_density = 0;
+  var offset = Math.floor(kernel.width / 2);
+  var race = overlay.mode.substring(4);
+  for (var i=0; i<data.towns.length; i++) {
+    var town = data.towns[i];
+    if (race == "" || race == town.r) {
+      var x1 = town.x1 - offset, y1 = town.y1 - offset;
+      var x2 = x1 + kernel.width, y2 = y1 + kernel.width;
+      for (var y=y1; y<y2; y++)
+        for (var x=x1; x<x2; x++)
+          overlay.density[y * MAP_WIDTH + x] += town.p * kernel.buffer[(y - y1) * kernel.width + x - x1];
+    }
+  }
+  for (var i=0; i<overlay.density.length; i++)
+    if (overlay.density[i] > overlay.max_density)
+      overlay.max_density = overlay.density[i];
 }
 
 function paint() {
   var ctx = $("#map")[0].getContext("2d");
   
-  //paint background image
+  //clear canvas or paint background image
   
-  ctx.drawImage(bg_img, 0, 0, 1000, 1100);
-  ctx.globalAlpha = 0.8;
-  ctx.beginPath();
-  ctx.rect(0, 0, 1000, 1000);
-  ctx.fillStyle = "black";
-  ctx.fill();
-  ctx.globalAlpha = 1;
+  if ($("#show_map").is(':checked')) {
+    ctx.drawImage(bg_img, 0, 0, MAP_WIDTH, MAP_WIDTH + 100);
+    if (overlay.mode == "none") {
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.rect(0, 0, MAP_WIDTH, MAP_WIDTH);
+      ctx.fillStyle = "black";
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+  else ctx.clearRect(0, 0, MAP_WIDTH, MAP_WIDTH);
+  
+  var imgd = ctx.getImageData(0, 0, MAP_WIDTH, MAP_WIDTH);
+  
+  //paint overlays
+  
+  if (overlay.mode.substring(0, 3) == "pop") {
+      var alpha = 0.5, len = overlay.rgb.byteLength / 3;
+      if (!$("#show_map").is(':checked')) alpha = 0;
+      for (var i=0; i<len; i++) {
+        var idx = i * 4, idx1 = i * 3;
+        imgd.data[idx] = Math.floor(alpha * imgd.data[idx] + (1 - alpha) * overlay.rgb[idx1]);
+        imgd.data[idx + 1] = Math.floor(alpha * imgd.data[idx + 1] + (1 - alpha) * overlay.rgb[idx1 + 1]);
+        imgd.data[idx + 2] = Math.floor(alpha * imgd.data[idx + 2] + (1 - alpha) * overlay.rgb[idx1 + 2]);
+        imgd.data[idx + 3] = 255;
+      }
+  }
   
   //paint towns
   
-  var imgd = ctx.getImageData(0, 0, 1000, 1000);
   if ($("#show_towns").is(':checked'))
     for (var i=0; i<data.towns.length; i++) {
       var town = data.towns[i];
       if (town.c != 1) {
-        var idx = (town.x1 + (town.y1 * imgd.width)) * 4;        
+        var idx = (town.x1 + (town.y1 * MAP_WIDTH)) * 4;
         imgd.data[idx] = 0;
-        imgd.data[idx+1] = 0;
-        imgd.data[idx+2] = 255;
-        imgd.data[idx+3] = 255;
+        imgd.data[idx + 1] = 0;
+        imgd.data[idx + 2] = 255;
+        imgd.data[idx + 3] = 255;
       }
     }
+    
   ctx.putImageData(imgd, 0, 0);
   
   //paint capitals
@@ -190,8 +292,8 @@ function info_box(ctx, x, y, lines) {
   
   //fix position
   
-  if (x > 1000 - w) x = 1000 - w;
-  if (y > 1000 - h) y = 1000 - h;
+  if (x > MAP_WIDTH - w) x = MAP_WIDTH - w;
+  if (y > MAP_WIDTH - h) y = MAP_WIDTH - h;
   if (y < 0) y = 0;
   if (x < 0) x = 0;
   
