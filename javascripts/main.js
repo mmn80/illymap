@@ -157,22 +157,22 @@ function compute_density(kernel, race) {
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
     if (race == "" || race == town.r) {
-      var x1 = town.x1 - offset, x2 = x1 + kernel.width;
-      if (x1 < 0) x1 = 0;
+      var x1 = town.x1 - offset, x2 = x1 + kernel.width, dx = 0;
+      if (x1 < 0) { dx = -x1; x1 = 0; }
       if (x2 >= MAP_WIDTH) x2 = MAP_WIDTH - 1;
       for (var x=x1; x<x2; x++)
-        buffer[town.y1 * MAP_WIDTH + x] += town.p * kernel.buffer[x - x1];
+        buffer[town.y1 * MAP_WIDTH + x] += town.p * kernel.buffer[x - x1 + dx];
     }
   }
   for (var y=0; y<MAP_WIDTH; y++)
     for (var x=0; x<MAP_WIDTH; x++) {
       var val = buffer[y * MAP_WIDTH + x];
       if (val) {
-        var y1 = y - offset, y2 = y1 + kernel.width;
-        if (y1 < 0) y1 = 0;
+        var y1 = y - offset, y2 = y1 + kernel.width, dy = 0;
+        if (y1 < 0) { dy = - y1; y1 = 0; }
         if (y2 >= MAP_WIDTH) y2 = MAP_WIDTH - 1;
         for (var i=y1;i<y2;i++)
-          overlay.density[i * MAP_WIDTH + x] += val * kernel.buffer[i - y1];
+          overlay.density[i * MAP_WIDTH + x] += val * kernel.buffer[i - y1 + dy];
       }
     }
 }
