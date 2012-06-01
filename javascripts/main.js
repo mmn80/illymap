@@ -6,6 +6,7 @@ var BG_IMAGE = "images/region_faction_map.png";
 var MAP_WIDTH = 1000;
 
 var data = { server: "", date: "", alliances: [], towns: [] };
+
 var bg_img = new Image();
 var capitals = [];
 var map_state = {
@@ -15,7 +16,7 @@ var map_state = {
 };
 
 var overlay = {
-  std_dev: 5,     //standard deviation (UI)
+  std_dev: 15,     //standard deviation (UI)
   mode: "none",   //overlay mode (UI)
   rgb: null,      //overlay rgb arraybuffer; this is the end result of all overlay computations
   density: null,  //MAP_WIDTHxMAP_WIDTH float32 arraybuffer, values represent populations; used for "pop. density" overlays
@@ -46,7 +47,7 @@ $(document).ready(function () {
 });
 
 function initialize() {
-  $("#server_info").html("server: " + data.server + "<br/>date: " + data.date);
+  $("#server_info").html("server: " + data.server + "<br/>date: " + data.date.substring(0, 10));
   capitals = [];
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
@@ -75,6 +76,7 @@ function initialize() {
 function recompute_overlay() {
   overlay.std_dev = parseInt($("#std_dev").val());
   overlay.mode = $("#overlay_mode").val();
+  var race = overlay.mode.substring(4);
 
   // search for cached Gaussian kernel
 
@@ -91,18 +93,24 @@ function recompute_overlay() {
     kernel = { std_dev: overlay.std_dev };
     var half = 3 * kernel.std_dev; // 3*sigma coverage => less then 0.5% loss
     kernel.width = 1 + 2 * half;   // add 1 so that there is a (0,0) pixel in the middle
-    kernel.buffer = new Float32Array(new ArrayBuffer(4 * kernel.width * kernel.width));
-    var factor1 = 2 * Math.pow(kernel.std_dev, 2), factor2 = Math.PI * factor1;
-    for (var y=0; y<kernel.width; y++)
-      for (var x=0; x<kernel.width; x++)
-        kernel.buffer[y * kernel.width + x] = Math.exp(-(Math.pow(x-half, 2) + Math.pow(y-half, 2)) / factor1) / factor2;
+    kernel.buffer = new Float32Array(new ArrayBuffer(4 * kernel.width));
+    var factor1 = 2 * Math.pow(kernel.std_dev, 2), factor2 = kernel.std_dev * Math.sqrt(2 * Math.PI);
+    for (var x=0; x<kernel.width; x++)
+      kernel.buffer[x] = Math.exp(-Math.pow(x-half, 2) / factor1) / factor2;
     overlay.kernels.push(kernel);
   }
 
   // compute density buffers
 
   if (overlay.mode.substring(0, 3) == "pop") {
-    compute_density(kernel);
+    compute_density(kernel, race);
+
+    // compute max density (for normalization)
+
+    overlay.max_density = 0;
+    for (var i=0; i<overlay.density.length; i++)
+      if (overlay.density[i] > overlay.max_density)
+        overlay.max_density = overlay.density[i];
 
     // compute rgb buffer
 
@@ -123,28 +131,12 @@ var gamma = 0.8;
 function val2rgb(val, idx) {
   var factor = 0, r = 0, g = 0, b = 0;
   var wavelen = 380 + 400 * val / overlay.max_density;
-  if (wavelen >= 380 && wavelen < 440) {
-    r = -(wavelen - 440) / 60;
-    b = 1;
-  }
-  else if (wavelen < 490) {
-    g = -(wavelen - 440) / 50;
-    b = 1;
-  }
-  else if (wavelen < 510) {
-    g = 1;
-    b = -(wavelen - 510) / 20;
-  }
-  else if (wavelen < 580) {
-    r = -(wavelen - 510) / 70;
-    g = 1;
-  }
-  else if (wavelen < 645) {
-    r = 1;
-    g = -(wavelen - 645) / 65;
-  }
-  else if (wavelen < 780)
-    r = 1;
+  if (wavelen >= 380 && wavelen < 440) { r = -(wavelen - 440) / 60; b = 1; }
+  else if (wavelen < 490) { g = (wavelen - 440) / 50; b = 1; }
+  else if (wavelen < 510) { g = 1; b = -(wavelen - 510) / 20; }
+  else if (wavelen < 580) { r = (wavelen - 510) / 70; g = 1; }
+  else if (wavelen < 645) { r = 1; g = -(wavelen - 645) / 65; }
+  else if (wavelen < 780) r = 1;
   if (wavelen >= 380 && wavelen < 420)
     factor = 0.3 + 0.7 * (wavelen - 380) / 40;
   else if (wavelen < 700)
@@ -156,24 +148,33 @@ function val2rgb(val, idx) {
   if (b) overlay.rgb[idx + 2] = Math.round(255 * Math.pow(b * factor, gamma));
 }
 
-function compute_density(kernel) {
+// applies a 1D gaussian kernel on both dimensions succesively
+
+function compute_density(kernel, race) {
   overlay.density = new Float32Array(new ArrayBuffer(4 * MAP_WIDTH * MAP_WIDTH));
-  overlay.max_density = 0;
+  var buffer = new Float32Array(new ArrayBuffer(4 * MAP_WIDTH * MAP_WIDTH));
   var offset = Math.floor(kernel.width / 2);
-  var race = overlay.mode.substring(4);
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
     if (race == "" || race == town.r) {
-      var x1 = town.x1 - offset, y1 = town.y1 - offset;
-      var x2 = x1 + kernel.width, y2 = y1 + kernel.width;
-      for (var y=y1; y<y2; y++)
-        for (var x=x1; x<x2; x++)
-          overlay.density[y * MAP_WIDTH + x] += town.p * kernel.buffer[(y - y1) * kernel.width + x - x1];
+      var x1 = town.x1 - offset, x2 = x1 + kernel.width;
+      if (x1 < 0) x1 = 0;
+      if (x2 >= MAP_WIDTH) x2 = MAP_WIDTH - 1;
+      for (var x=x1; x<x2; x++)
+        buffer[town.y1 * MAP_WIDTH + x] += town.p * kernel.buffer[x - x1];
     }
   }
-  for (var i=0; i<overlay.density.length; i++)
-    if (overlay.density[i] > overlay.max_density)
-      overlay.max_density = overlay.density[i];
+  for (var y=0; y<MAP_WIDTH; y++)
+    for (var x=0; x<MAP_WIDTH; x++) {
+      var val = buffer[y * MAP_WIDTH + x];
+      if (val) {
+        var y1 = y - offset, y2 = y1 + kernel.width;
+        if (y1 < 0) y1 = 0;
+        if (y2 >= MAP_WIDTH) y2 = MAP_WIDTH - 1;
+        for (var i=y1;i<y2;i++)
+          overlay.density[i * MAP_WIDTH + x] += val * kernel.buffer[i - y1];
+      }
+    }
 }
 
 function paint() {
@@ -203,9 +204,10 @@ function paint() {
       if (!$("#show_map").is(':checked')) alpha = 0;
       for (var i=0; i<len; i++) {
         var idx = i * 4, idx1 = i * 3;
-        imgd.data[idx] = Math.floor(alpha * imgd.data[idx] + (1 - alpha) * overlay.rgb[idx1]);
-        imgd.data[idx + 1] = Math.floor(alpha * imgd.data[idx + 1] + (1 - alpha) * overlay.rgb[idx1 + 1]);
-        imgd.data[idx + 2] = Math.floor(alpha * imgd.data[idx + 2] + (1 - alpha) * overlay.rgb[idx1 + 2]);
+        var grey = alpha * (0.34 * imgd.data[idx] + 0.5 * imgd.data[idx + 1] + 0.16 * imgd.data[idx + 2]);
+        imgd.data[idx] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1]);
+        imgd.data[idx + 1] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 1]);
+        imgd.data[idx + 2] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 2]);
         imgd.data[idx + 3] = 255;
       }
   }
