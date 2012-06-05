@@ -58,7 +58,10 @@
       </div>
       <div id="header_right">
         <form name="ui_form">
-          <div class="ui_panel" id="server_info">server:?<br/>date:?</div>
+          <div class="ui_panel">
+            <div id="server_info">server:?<br/>date:?<br/></div>
+            <div id="pos_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">[ 0 : 0 ]</div>
+          </div>
           <div class="ui_panel">
             <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Population overlays should take a few seconds on a decent computer. Race partition should be roughly 5x, in both CPU and memory. Alliance partition is the heaviest computation, and it will eat memory proportional to the maximum number of alliances that have influence over a single spot. To decrease that chance, use a smaller sigma.">Overlay:</label>
             <select id="overlay_mode">

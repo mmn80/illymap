@@ -89,9 +89,15 @@ canvas {
   padding-right: 20px;
 }
 
+#pos_info {
+  font-weight: bold;
+  color: lime;
+}
+
 #infobox {
   display: none;
 }
+
 #infobox, .tooltip::after {
   position: absolute;
   padding: 3px 7px;
@@ -100,6 +106,7 @@ canvas {
   background: rgba(199, 159, 0, 0.8);
   box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.5);
   font-size: 12px;
+  font-weight: normal;
 }
 
 .tooltip::after {

@@ -5,6 +5,7 @@ var ALLIANCES_XML = "data/datafile_alliances.xml";
 var DATA_JSON = "data/data.json";
 var BG_IMAGE = "images/region_faction_map.png";
 var STAR_IMAGE = "images/star.gif";
+var ILLY_MAP_URL = "http://elgea.illyriad.co.uk/#/World/Map/{x}/{y}/10";
 
 var MAP_WIDTH = 1000;
 var OVR_NONE = "none", OVR_POP = "pop", OVR_PAR = "par";        // overlay modes: none, population density in false colors, or map partition
@@ -87,6 +88,7 @@ $(document).ready(function () {
   $("#std_dev").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
   $("#map").mousemove(map_mousemove);
+  $("#map").dblclick(map_dblclick);
   bg_tex.image.src = BG_IMAGE;
   star_tex.image.src = STAR_IMAGE;
   $.getJSON(DATA_JSON, function(d) {
@@ -238,7 +240,7 @@ function get_town_pos(town, is_selected) {
   if (is_selected) r *= 1.2;
   if (r < 4) r = 4;
   var x = town.x1 - r, y = MAP_WIDTH - town.y1 - r;
-  return { x: x, y: y, r: r }
+  return { x: x, y: y, scale: 2 * r }
 }
 
 function initDataBuffers() {
@@ -257,8 +259,8 @@ function initDataBuffers() {
   for (var i=0; i<capitals.length; i++) {
     var pos = get_town_pos(capitals[i], false);
     for (var j=0; j<vtx_pos.length; j+=3) {
-      vertices.push(vtx_pos[j] * 2 * pos.r + pos.x);
-      vertices.push(vtx_pos[j + 1] * 2 * pos.r + pos.y);
+      vertices.push(vtx_pos[j] * pos.scale + pos.x);
+      vertices.push(vtx_pos[j + 1] * pos.scale + pos.y);
       vertices.push(vtx_pos[j + 2] - 1.0);
     }
   }
@@ -324,80 +326,58 @@ function paint() {
   if (v_map) {
     mat4.identity(mvMatrix);
     mat4.translate(mvMatrix, [0.0, 0.0, -5.0]);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
-    gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
-    gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
-
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, bg_tex);
-    gl.uniform1i(shaderProgram.uMapSampler, 0);
-
-    gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
-    gl.uniform1i(shaderProgram.uGreyBg, v_cap || v_tow || overlay.mode != OVR_NONE);
-    gl.uniform1i(shaderProgram.uStars, false);
-
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.mapPos.numItems);
+    paint_map(v_cap || v_tow || overlay.mode != OVR_NONE);
   }
 
-  //paint capitals
+  // paint capitals
 
   if (v_cap) {
     mat4.identity(mvMatrix);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
-    gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.starsTexPos.itemSize, gl.FLOAT, false, 0, 0);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsPos);
-    gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.starsPos.itemSize, gl.FLOAT, false, 0, 0);
-
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, star_tex);
-
-    gl.uniform1i(shaderProgram.uStarSampler, 1);
-    gl.uniform1i(shaderProgram.uStars, true);
-    gl.uniform3f(shaderProgram.uColor, 232 / 255, 222 / 255, 49 / 255);
-    gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
-
-    gl.drawArrays(gl.TRIANGLES, 0, buffers.starsPos.numItems);
-
+    paint_stars(buffers.starsPos, buffers.starsTexPos, { r: 232, g: 222, b: 49 });
     if (map_state.sel_cap) {
       var pos = get_town_pos(map_state.sel_cap, true);
       mat4.identity(mvMatrix);
       mat4.translate(mvMatrix, [pos.x, pos.y, -1.0]);
-      mat4.scale(mvMatrix, [2 * pos.r, 2 * pos.r, 1.0]);
-
-      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarTexPos);
-      gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.selStarTexPos.itemSize, gl.FLOAT, false, 0, 0);
-
-      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarPos);
-      gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.selStarPos.itemSize, gl.FLOAT, false, 0, 0);
-
-      gl.uniform3f(shaderProgram.uColor, 0 / 255, 255 / 255, 0 / 255);
-      gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
-
-      gl.drawArrays(gl.TRIANGLES, 0, buffers.selStarPos.numItems);
+      mat4.scale(mvMatrix, [pos.scale, pos.scale, 1.0]);
+      paint_stars(buffers.selStarPos, buffers.selStarTexPos, { r: 0, g: 255, b: 0 });
     }
-
-    /*for (var i=0; i<capitals.length; i++) {
-      var town = capitals[i];
-      var r = Math.floor(Math.sqrt(town.p / 300));
-      if (r < 2) r = 2;
-      r *= 2;
-      if (town == map_state.sel_cap) r *= 1.2;
-      var x = town.x1 - r, y = MAP_WIDTH - town.y1 - r;
-      mat4.identity(mvMatrix);
-      mat4.translate(mvMatrix, [x, y, -1.0]);
-      mat4.scale(mvMatrix, [r / 64, r / 64, 1.0]);
-      var color = (town == map_state.sel_cap ?  { r: 0, g: 255, b: 0 } : { r: 232, g: 222, b: 49 })
-
-      gl.uniform3f(shaderProgram.uColor, color.r / 255, color.g / 255, color.b / 255);
-      gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
-      gl.drawArrays(gl.TRIANGLES, 0, buffers.starsPos.numItems);
-    }*/
   }
+}
+
+function paint_map(grayed) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
+  gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
+  gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
+
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, bg_tex);
+  gl.uniform1i(shaderProgram.uMapSampler, 0);
+
+  gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+  gl.uniform1i(shaderProgram.uGreyBg, grayed);
+  gl.uniform1i(shaderProgram.uStars, false);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.mapPos.numItems);
+}
+
+function paint_stars(vtx_buffer, tex_buffer, color) {
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
+  gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.starsTexPos.itemSize, gl.FLOAT, false, 0, 0);
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
+  gl.vertexAttribPointer(shaderProgram.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
+
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, star_tex);
+
+  gl.uniform1i(shaderProgram.uStarSampler, 1);
+  gl.uniform1i(shaderProgram.uStars, true);
+  gl.uniform3f(shaderProgram.uColor, color.r / 255, color.g / 255, color.b / 255);
+  gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+
+  gl.drawArrays(gl.TRIANGLES, 0, tex_buffer.numItems);
 }
 
 function paint2D() {
@@ -488,6 +468,7 @@ function map_mousemove(event) {
   map_state.sel_cap = null;
   map_state.mx = event.pageX - this.offsetLeft;
   map_state.my = event.pageY - this.offsetTop;
+  $("#pos_info").html("[ " + (map_state.mx * 2 - MAP_WIDTH) + " : " + (MAP_WIDTH - map_state.my * 2) + " ]");
   if ($("#show_capitals").is(':checked'))
     for (var i=0; i<capitals.length; i++) {
         var town = capitals[i];
@@ -504,7 +485,7 @@ function map_mousemove(event) {
       $("#infobox").hide();
     else {
       $("#infobox").html("<i>" + map_state.sel_cap.name + "</i><br />" +
-        "capital of " + map_state.sel_cap.alliance + "<br />" +
+        "capital of <strong>" + map_state.sel_cap.alliance + "</strong><br />" +
         "population " + map_state.sel_cap.p);
       var pos = $("#map").position();
       $("#infobox").css({
@@ -515,6 +496,12 @@ function map_mousemove(event) {
     }
     paint();
   }
+}
+
+function map_dblclick(event) {
+  var x = (event.pageX - this.offsetLeft) * 2 - MAP_WIDTH;
+  var y = MAP_WIDTH - (event.pageY - this.offsetTop) * 2;
+  window.open(ILLY_MAP_URL.replace("{x}", x).replace("{y}", y), '_blank');
 }
 
 function recompute_overlay() {
