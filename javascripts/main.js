@@ -47,8 +47,22 @@ var overlay = {    // object containing overlay data
 
 var gl, shaderProgram;
 var mvMatrix = mat4.create(), pMatrix = mat4.create();
-var buffers = { mapPos: null, mapTexPos: null, starsPos: null, starsTexPos: null, selStarPos: null, selStarTexPos: null };
-var bg_tex, star_tex;
+var buffers = {
+  mapPos: null,
+  mapTexPos: null,
+  starsPos: null,
+  starsTexPos: null,
+  selStarPos: null,
+  selStarTexPos: null
+};
+var textures = {
+  bg_map: null,
+  star: null,
+  towns: null   // r;g = floor(population / 4)
+                // b;a[7];a[6] = alliance index OR
+                // OR b = confed index
+                // a[1];a[0] = race index
+}
 
 
 
@@ -60,10 +74,10 @@ var bg_tex, star_tex;
 $(document).ready(function () {
   if (!init_webgl()) return;
   var bg_loaded = false, star_loaded = false, data_loaded = false;
-  bg_tex.image.onload = function() {
-    gl.bindTexture(gl.TEXTURE_2D, bg_tex);
+  textures.bg_map.image.onload = function() {
+    gl.bindTexture(gl.TEXTURE_2D, textures.bg_map);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bg_tex.image);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textures.bg_map.image);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -72,25 +86,26 @@ $(document).ready(function () {
     bg_loaded = true;
     if (data_loaded && star_loaded) init_data();
   };
-  star_tex.image.onload = function() {
-    gl.bindTexture(gl.TEXTURE_2D, star_tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, star_tex.image);
+  textures.star.image.onload = function() {
+    gl.bindTexture(gl.TEXTURE_2D, textures.star);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textures.star.image);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.bindTexture(gl.TEXTURE_2D, null);
     star_loaded = true;
     if (data_loaded && bg_loaded) init_data();
   };
-  $("#show_map").click(paint);
-  $("#show_towns").click(paint);
-  $("#show_capitals").click(paint);
+  $("#show_map").change(paint);
+  $("#show_towns").change(paint);
+  $("#show_capitals").change(paint);
   $("#overlay_mode").change(recompute_overlay);
   $("#std_dev").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
   $("#map").mousemove(map_mousemove);
   $("#map").dblclick(map_dblclick);
-  bg_tex.image.src = BG_IMAGE;
-  star_tex.image.src = STAR_IMAGE;
+  textures.bg_map.image.src = BG_IMAGE;
+  textures.star.image.src = STAR_IMAGE;
   $.getJSON(DATA_JSON, function(d) {
     data = d;
     data_loaded = true;
@@ -104,7 +119,7 @@ function init_data() {
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
     town.x1 = Math.round((town.x + MAP_WIDTH) / 2);
-    town.y1 = -Math.round((town.y + MAP_WIDTH) / 2) + MAP_WIDTH;
+    town.y1 = Math.round((town.y + MAP_WIDTH) / 2);
     if (town.r === undefined)
       town.r = "H";
     if (town.c == 1) {
@@ -122,7 +137,8 @@ function init_data() {
   capitals.sort(function(a, b) { // we need this for proper mouse over triggering when capitals overlap
     return a.p - b.p;
   });
-  initDataBuffers();
+  init_data_buffers();
+  init_towns_tex();
   paint();
 }
 
@@ -139,20 +155,20 @@ function init_webgl() {
     return false;
   }
   else {
-    if (!initShaders()) return false;
-    initBuffers();
-    bg_tex = gl.createTexture();
-    bg_tex.image = new Image();
-    star_tex = gl.createTexture();
-    star_tex.image = new Image();
+    if (!init_shaders()) return false;
+    init_static_buffers();
+    textures.bg_map = gl.createTexture();
+    textures.bg_map.image = new Image();
+    textures.star = gl.createTexture();
+    textures.star.image = new Image();
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     return true;
   }
 }
 
-function initShaders() {
-  var fragmentShader = getShader(gl, "shader-fs");
-  var vertexShader = getShader(gl, "shader-vs");
+function init_shaders() {
+  var fragmentShader = get_shader(gl, "shader-fs");
+  var vertexShader = get_shader(gl, "shader-vs");
 
   shaderProgram = gl.createProgram();
   gl.attachShader(shaderProgram, vertexShader);
@@ -175,8 +191,10 @@ function initShaders() {
     shaderProgram.uPMatrix = gl.getUniformLocation(shaderProgram, "uPMatrix");
     shaderProgram.uMVMatrix = gl.getUniformLocation(shaderProgram, "uMVMatrix");
     shaderProgram.uMapSampler = gl.getUniformLocation(shaderProgram, "uMapSampler");
+    shaderProgram.uTownsSampler = gl.getUniformLocation(shaderProgram, "uTownsSampler");
     shaderProgram.uStarSampler = gl.getUniformLocation(shaderProgram, "uStarSampler");
     shaderProgram.uGreyBg = gl.getUniformLocation(shaderProgram, "uGreyBg");
+    shaderProgram.uShowTowns = gl.getUniformLocation(shaderProgram, "uShowTowns");
     shaderProgram.uColor = gl.getUniformLocation(shaderProgram, "uColor");
     shaderProgram.uStars = gl.getUniformLocation(shaderProgram, "uStars");
 
@@ -184,32 +202,7 @@ function initShaders() {
   }
 }
 
-function getShader(gl, id) {
-  var shaderScript = $("#" + id)[0];
-  if (!shaderScript) return null;
-  var str = "";
-  var k = shaderScript.firstChild;
-  while (k) {
-    if (k.nodeType == 3)
-      str += k.textContent;
-    k = k.nextSibling;
-  }
-  var shader;
-  if (shaderScript.type == "x-shader/x-fragment")
-    shader = gl.createShader(gl.FRAGMENT_SHADER);
-  else if (shaderScript.type == "x-shader/x-vertex")
-    shader = gl.createShader(gl.VERTEX_SHADER);
-  else return null;
-  gl.shaderSource(shader, str);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      alert(gl.getShaderInfoLog(shader));
-      return null;
-  }
-  return shader;
-}
-
-function initBuffers() {
+function init_static_buffers() {
   buffers.mapPos = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
   var vertices = [
@@ -239,11 +232,11 @@ function get_town_pos(town, is_selected) {
   var r = Math.floor(Math.sqrt(town.p / 100));
   if (is_selected) r *= 1.2;
   if (r < 4) r = 4;
-  var x = town.x1 - r, y = MAP_WIDTH - town.y1 - r;
+  var x = town.x1 - r, y = town.y1 - r;
   return { x: x, y: y, scale: 2 * r }
 }
 
-function initDataBuffers() {
+function init_data_buffers() {
   var vtx_pos = [
        0.0, 0.0, 0.0,
        1.0, 0.0, 0.0,
@@ -299,6 +292,30 @@ function initDataBuffers() {
   buffers.selStarTexPos.numItems = 6;
 }
 
+function init_towns_tex() {
+  var buffer = new Uint8Array(new ArrayBuffer(2048 * 2048 * 4));
+  for (var i=0; i<data.towns.length; i++) {
+    var town = data.towns[i];
+    var idx = (town.x1 + (town.y1 * 2048)) * 4;
+    var p = Math.floor(town.p / 4);
+    var r = 0;
+    if (town.r == "H") r = 1;
+    else if (town.r == "D") r = 2;
+    else if (town.r == "O") r = 3;
+    buffer[idx] = Math.floor(p / 256);
+    buffer[idx + 1] = p % 256;
+    buffer[idx + 2] = 0; // alliance index
+    buffer[idx + 3] = r;
+  }
+  textures.towns = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2048, 2048, 0, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
 
 
 
@@ -322,6 +339,11 @@ function paint() {
   gl.uniformMatrix4fv(shaderProgram.uPMatrix, false, pMatrix);
 
   // paint background map
+
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  gl.uniform1i(shaderProgram.uTownsSampler, 2);
+  gl.uniform1i(shaderProgram.uShowTowns, v_tow);
 
   if (v_map) {
     mat4.identity(mvMatrix);
@@ -352,7 +374,7 @@ function paint_map(grayed) {
   gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, bg_tex);
+  gl.bindTexture(gl.TEXTURE_2D, textures.bg_map);
   gl.uniform1i(shaderProgram.uMapSampler, 0);
 
   gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
@@ -370,7 +392,7 @@ function paint_stars(vtx_buffer, tex_buffer, color) {
   gl.vertexAttribPointer(shaderProgram.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.activeTexture(gl.TEXTURE1);
-  gl.bindTexture(gl.TEXTURE_2D, star_tex);
+  gl.bindTexture(gl.TEXTURE_2D, textures.star);
 
   gl.uniform1i(shaderProgram.uStarSampler, 1);
   gl.uniform1i(shaderProgram.uStars, true);
@@ -386,7 +408,7 @@ function paint2D() {
   //clear canvas or paint background image
 
   if ($("#show_map").is(':checked')) {
-    ctx.drawImage(bg_tex.image, 0, 0, MAP_WIDTH, MAP_WIDTH);
+    ctx.drawImage(textures.bg_map.image, 0, 0, MAP_WIDTH, MAP_WIDTH);
     if (overlay.mode == OVR_NONE) {
       ctx.globalAlpha = 0.8;
       ctx.beginPath();
@@ -467,8 +489,8 @@ function map_mousemove(event) {
   var old_sel_cap = map_state.sel_cap;
   map_state.sel_cap = null;
   map_state.mx = event.pageX - this.offsetLeft;
-  map_state.my = event.pageY - this.offsetTop;
-  $("#pos_info").html("[ " + (map_state.mx * 2 - MAP_WIDTH) + " : " + (MAP_WIDTH - map_state.my * 2) + " ]");
+  map_state.my = MAP_WIDTH - event.pageY + this.offsetTop;
+  $("#pos_info").html("[ " + (map_state.mx * 2 - MAP_WIDTH) + " : " + (map_state.my * 2 - MAP_WIDTH) + " ]");
   if ($("#show_capitals").is(':checked'))
     for (var i=0; i<capitals.length; i++) {
         var town = capitals[i];
@@ -490,7 +512,7 @@ function map_mousemove(event) {
       var pos = $("#map").position();
       $("#infobox").css({
           position: "absolute",
-          top: (pos.top + town.y1 - 60) + "px",
+          top: (pos.top + MAP_WIDTH - town.y1 - 60) + "px",
           left: (pos.left + town.x1 + 15) + "px"
       }).show();
     }
@@ -854,4 +876,29 @@ function show_progress(percent) {
   ctx.fillStyle = "white";
   ctx.font = "40px Calibri";
   ctx.fillText(percent + "%", x + 40, y + 38);
+}
+
+function get_shader(gl, id) {
+  var shaderScript = $("#" + id)[0];
+  if (!shaderScript) return null;
+  var str = "";
+  var k = shaderScript.firstChild;
+  while (k) {
+    if (k.nodeType == 3)
+      str += k.textContent;
+    k = k.nextSibling;
+  }
+  var shader;
+  if (shaderScript.type == "x-shader/x-fragment")
+    shader = gl.createShader(gl.FRAGMENT_SHADER);
+  else if (shaderScript.type == "x-shader/x-vertex")
+    shader = gl.createShader(gl.VERTEX_SHADER);
+  else return null;
+  gl.shaderSource(shader, str);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      alert(gl.getShaderInfoLog(shader));
+      return null;
+  }
+  return shader;
 }

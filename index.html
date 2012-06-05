@@ -13,9 +13,13 @@
 
       uniform sampler2D uMapSampler;
       uniform sampler2D uStarSampler;
+      uniform sampler2D uTownsSampler;
+
       uniform bool uGreyBg;
       uniform bool uStars;
       uniform vec3 uColor;
+      uniform bool uShowTowns;
+
       varying vec2 vTextureCoord;
 
       void main(void) {
@@ -24,10 +28,22 @@
           gl_FragColor = textureColor * vec4(uColor, 1.0);
         }
         else {
-          gl_FragColor = texture2D(uMapSampler, vec2(vTextureCoord.s, vTextureCoord.t));//gl_FragCoord.x / 1000.0, gl_FragCoord.y / 1000.0));
-          if (uGreyBg) {
-            float grey = (0.34 * gl_FragColor.r + 0.5 * gl_FragColor.g + 0.16 * gl_FragColor.b);
-            gl_FragColor = vec4(grey, grey, grey, gl_FragColor[3]);
+          bool is_town = false;
+          if (uShowTowns) {
+            vec2 pos = vTextureCoord * 0.48828125; // 0.48828125 = 1000 / 1024 * 0.5; 0.00012207 = 0.48828125 / 4000
+            is_town = (texture2D(uTownsSampler, vec2(pos.s, pos.t)) != vec4(0.0, 0.0, 0.0, 0.0));
+            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(pos.s + 0.00012207, pos.t)) != vec4(0.0, 0.0, 0.0, 0.0));
+            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(pos.s, pos.t + 0.00012207)) != vec4(0.0, 0.0, 0.0, 0.0));
+            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(pos.s + 0.00012207, pos.t + 0.00012207)) != vec4(0.0, 0.0, 0.0, 0.0));
+          }
+          if (is_town)
+            gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
+          else {
+            gl_FragColor = texture2D(uMapSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+            if (uGreyBg) {
+              float grey = (0.34 * gl_FragColor.r + 0.5 * gl_FragColor.g + 0.16 * gl_FragColor.b);
+              gl_FragColor = vec4(grey, grey, grey, gl_FragColor[3]);
+            }
           }
         }
       }
