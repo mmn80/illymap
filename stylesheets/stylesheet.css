@@ -10,7 +10,7 @@ body {
 }
 
 h1, h2, h3, h4, h5, h6 {
-  margin: 5px 0;
+  margin: 3px 0;
   font-weight: 700;
   font-family: 'Lucida Grande', 'Calibri', Helvetica, Arial, sans-serif;
   letter-spacing: -1px;
@@ -64,6 +64,10 @@ header {
   display: block;
 }
 
+canvas {
+  border: none;
+}
+
 #header_left, #header_right {
   display: inline-block;
   height: 100%;
@@ -85,20 +89,27 @@ header {
   padding-right: 20px;
 }
 
-.tooltip::after {
-  background: rgba(199, 159, 0, 0.8);
-  border-radius: 8px 8px 8px 0px;
-  box-shadow: 1px 1px 10px rgba(0, 0, 0, 0.5);
-  color: #FFF;
-  content: attr(data-tooltip);
-  margin-top: -24px;
-  opacity: 0;
-  padding: 3px 7px;
+#infobox {
+  display: none;
+}
+#infobox, .tooltip::after {
   position: absolute;
+  padding: 3px 7px;
+  border-radius: 8px 8px 8px 0px;
+  color: #FFF;
+  background: rgba(199, 159, 0, 0.8);
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+}
+
+.tooltip::after {
   visibility: hidden;
+  margin-top: -24px;
+  content: attr(data-tooltip);
+  opacity: 0;
   transition: all 0.4s ease-in-out;
 }
- 
+
 .tooltip:hover::after {
   opacity: 1;
   visibility: visible;

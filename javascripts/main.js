@@ -1,9 +1,10 @@
-//"use strict";
+"use strict";
 
 var TOWNS_XML = "data/datafile_towns.xml";
 var ALLIANCES_XML = "data/datafile_alliances.xml";
 var DATA_JSON = "data/data.json";
 var BG_IMAGE = "images/region_faction_map.png";
+var STAR_IMAGE = "images/star.gif";
 
 var MAP_WIDTH = 1000;
 var OVR_NONE = "none", OVR_POP = "pop", OVR_PAR = "par";        // overlay modes: none, population density in false colors, or map partition
@@ -15,7 +16,6 @@ var PAR_COLORS = [ [0xFF,0,0]/*red*/, [0,0xFF,0]/*lime*/, [0,0,0xFF]/*blue*/, [0
 
 var data = { server: "", date: "", alliances: [], towns: [] }; // data loaded from the json file, generated based on the Illy-supplied xmls
 
-var bg_img = new Image();
 var capitals = []; // prefiltered list of alliance capitals
 var map_state = {
   mx: 0,           // mousex
@@ -44,11 +44,41 @@ var overlay = {    // object containing overlay data
   kernels: []      // precomputed gaussian distributions of form { std_dev: val, buffer: Float32Array }
 }
 
+var gl, shaderProgram;
+var mvMatrix = mat4.create(), pMatrix = mat4.create();
+var buffers = { mapPos: null, mapTexPos: null, starsPos: null, starsTexPos: null, selStarPos: null, selStarTexPos: null };
+var bg_tex, star_tex;
+
+
+
+
+
+
+// initialization ******************************************************************
+
 $(document).ready(function () {
-  var img_loaded = false, data_loaded = false;
-  bg_img.onload = function() {
-    img_loaded = true;
-    if (data_loaded) initialize();
+  if (!init_webgl()) return;
+  var bg_loaded = false, star_loaded = false, data_loaded = false;
+  bg_tex.image.onload = function() {
+    gl.bindTexture(gl.TEXTURE_2D, bg_tex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bg_tex.image);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    bg_loaded = true;
+    if (data_loaded && star_loaded) init_data();
+  };
+  star_tex.image.onload = function() {
+    gl.bindTexture(gl.TEXTURE_2D, star_tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, star_tex.image);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    star_loaded = true;
+    if (data_loaded && bg_loaded) init_data();
   };
   $("#show_map").click(paint);
   $("#show_towns").click(paint);
@@ -57,15 +87,16 @@ $(document).ready(function () {
   $("#std_dev").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
   $("#map").mousemove(map_mousemove);
-  bg_img.src = BG_IMAGE;
+  bg_tex.image.src = BG_IMAGE;
+  star_tex.image.src = STAR_IMAGE;
   $.getJSON(DATA_JSON, function(d) {
     data = d;
     data_loaded = true;
-    if (img_loaded) initialize();
+    if (bg_loaded && star_loaded) init_data();
   });
 });
 
-function initialize() {
+function init_data() {
   $("#server_info").html("server: " + data.server + "<br/>date: " + data.date.substring(0, 10));
   capitals = [];
   for (var i=0; i<data.towns.length; i++) {
@@ -89,8 +120,368 @@ function initialize() {
   capitals.sort(function(a, b) { // we need this for proper mouse over triggering when capitals overlap
     return a.p - b.p;
   });
+  initDataBuffers();
   paint();
 }
+
+function init_webgl() {
+  var canvas = $("#map")[0];
+  try {
+    gl = canvas.getContext("experimental-webgl");
+    gl.viewportWidth = canvas.width;
+    gl.viewportHeight = canvas.height;
+  }
+  catch (e) {}
+  if (!gl) {
+    alert("Could not initialise WebGL, sorry :-(");
+    return false;
+  }
+  else {
+    if (!initShaders()) return false;
+    initBuffers();
+    bg_tex = gl.createTexture();
+    bg_tex.image = new Image();
+    star_tex = gl.createTexture();
+    star_tex.image = new Image();
+    gl.clearColor(0.0, 0.0, 0.0, 1.0);
+    return true;
+  }
+}
+
+function initShaders() {
+  var fragmentShader = getShader(gl, "shader-fs");
+  var vertexShader = getShader(gl, "shader-vs");
+
+  shaderProgram = gl.createProgram();
+  gl.attachShader(shaderProgram, vertexShader);
+  gl.attachShader(shaderProgram, fragmentShader);
+  gl.linkProgram(shaderProgram);
+
+  if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+    alert("Could not initialise shaders.");
+    return false;
+  }
+  else {
+    gl.useProgram(shaderProgram);
+
+    shaderProgram.aVertexPosition = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+    gl.enableVertexAttribArray(shaderProgram.aVertexPosition);
+
+    shaderProgram.aTextureCoord = gl.getAttribLocation(shaderProgram, "aTextureCoord");
+    gl.enableVertexAttribArray(shaderProgram.aTextureCoord);
+
+    shaderProgram.uPMatrix = gl.getUniformLocation(shaderProgram, "uPMatrix");
+    shaderProgram.uMVMatrix = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+    shaderProgram.uMapSampler = gl.getUniformLocation(shaderProgram, "uMapSampler");
+    shaderProgram.uStarSampler = gl.getUniformLocation(shaderProgram, "uStarSampler");
+    shaderProgram.uGreyBg = gl.getUniformLocation(shaderProgram, "uGreyBg");
+    shaderProgram.uColor = gl.getUniformLocation(shaderProgram, "uColor");
+    shaderProgram.uStars = gl.getUniformLocation(shaderProgram, "uStars");
+
+    return true;
+  }
+}
+
+function getShader(gl, id) {
+  var shaderScript = $("#" + id)[0];
+  if (!shaderScript) return null;
+  var str = "";
+  var k = shaderScript.firstChild;
+  while (k) {
+    if (k.nodeType == 3)
+      str += k.textContent;
+    k = k.nextSibling;
+  }
+  var shader;
+  if (shaderScript.type == "x-shader/x-fragment")
+    shader = gl.createShader(gl.FRAGMENT_SHADER);
+  else if (shaderScript.type == "x-shader/x-vertex")
+    shader = gl.createShader(gl.VERTEX_SHADER);
+  else return null;
+  gl.shaderSource(shader, str);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      alert(gl.getShaderInfoLog(shader));
+      return null;
+  }
+  return shader;
+}
+
+function initBuffers() {
+  buffers.mapPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
+  var vertices = [
+       0.0, 0.0,  0.0,
+       MAP_WIDTH,  0.0,  0.0,
+       0.0,  MAP_WIDTH,  0.0,
+       MAP_WIDTH,  MAP_WIDTH,  0.0
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+  buffers.mapPos.itemSize = 3;
+  buffers.mapPos.numItems = 4;
+
+  buffers.mapTexPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
+  var textureCoords = [
+      0.0, 0.0,
+      1.0, 0.0,
+      0.0, 1.0,
+      1.0, 1.0
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+  buffers.mapTexPos.itemSize = 2;
+  buffers.mapTexPos.numItems = 4;
+}
+
+function get_town_pos(town, is_selected) {
+  var r = Math.floor(Math.sqrt(town.p / 100));
+  if (is_selected) r *= 1.2;
+  if (r < 4) r = 4;
+  var x = town.x1 - r, y = MAP_WIDTH - town.y1 - r;
+  return { x: x, y: y, r: r }
+}
+
+function initDataBuffers() {
+  var vtx_pos = [
+       0.0, 0.0, 0.0,
+       1.0, 0.0, 0.0,
+       0.0, 1.0, 0.0,
+       1.0, 0.0, 0.0,
+       0.0, 1.0, 0.0,
+       1.0, 1.0, 0.0
+  ];
+
+  buffers.starsPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsPos);
+  var vertices = [];
+  for (var i=0; i<capitals.length; i++) {
+    var pos = get_town_pos(capitals[i], false);
+    for (var j=0; j<vtx_pos.length; j+=3) {
+      vertices.push(vtx_pos[j] * 2 * pos.r + pos.x);
+      vertices.push(vtx_pos[j + 1] * 2 * pos.r + pos.y);
+      vertices.push(vtx_pos[j + 2] - 1.0);
+    }
+  }
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+  buffers.starsPos.itemSize = 3;
+  buffers.starsPos.numItems = capitals.length * 6;
+
+  var tex_pos = [
+      0.0, 0.0,
+      1.0, 0.0,
+      0.0, 1.0,
+      1.0, 0.0,
+      0.0, 1.0,
+      1.0, 1.0
+  ];
+  buffers.starsTexPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
+  var textureCoords = [];
+  for (var i=0; i<capitals.length; i++)
+    for (var j=0; j<tex_pos.length; j++)
+      textureCoords.push(tex_pos[j]);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
+  buffers.starsTexPos.itemSize = 2;
+  buffers.starsTexPos.numItems = capitals.length * 6;
+
+  buffers.selStarPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarPos);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vtx_pos), gl.STATIC_DRAW);
+  buffers.selStarPos.itemSize = 3;
+  buffers.selStarPos.numItems = 6;
+
+  buffers.selStarTexPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarTexPos);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(tex_pos), gl.STATIC_DRAW);
+  buffers.selStarTexPos.itemSize = 2;
+  buffers.selStarTexPos.numItems = 6;
+}
+
+
+
+
+
+
+// paint ************************************************************************
+
+function paint() {
+  var v_map = $("#show_map").is(':checked');
+  var v_tow = $("#show_towns").is(':checked');
+  var v_cap = $("#show_capitals").is(':checked');
+
+  gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.enable(gl.BLEND);
+  //gl.disable(gl.DEPTH_TEST);
+
+  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
+  gl.uniformMatrix4fv(shaderProgram.uPMatrix, false, pMatrix);
+
+  // paint background map
+
+  if (v_map) {
+    mat4.identity(mvMatrix);
+    mat4.translate(mvMatrix, [0.0, 0.0, -5.0]);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
+    gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
+    gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, bg_tex);
+    gl.uniform1i(shaderProgram.uMapSampler, 0);
+
+    gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+    gl.uniform1i(shaderProgram.uGreyBg, v_cap || v_tow || overlay.mode != OVR_NONE);
+    gl.uniform1i(shaderProgram.uStars, false);
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.mapPos.numItems);
+  }
+
+  //paint capitals
+
+  if (v_cap) {
+    mat4.identity(mvMatrix);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
+    gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.starsTexPos.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsPos);
+    gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.starsPos.itemSize, gl.FLOAT, false, 0, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, star_tex);
+
+    gl.uniform1i(shaderProgram.uStarSampler, 1);
+    gl.uniform1i(shaderProgram.uStars, true);
+    gl.uniform3f(shaderProgram.uColor, 232 / 255, 222 / 255, 49 / 255);
+    gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+
+    gl.drawArrays(gl.TRIANGLES, 0, buffers.starsPos.numItems);
+
+    if (map_state.sel_cap) {
+      var pos = get_town_pos(map_state.sel_cap, true);
+      mat4.identity(mvMatrix);
+      mat4.translate(mvMatrix, [pos.x, pos.y, -1.0]);
+      mat4.scale(mvMatrix, [2 * pos.r, 2 * pos.r, 1.0]);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarTexPos);
+      gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.selStarTexPos.itemSize, gl.FLOAT, false, 0, 0);
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarPos);
+      gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.selStarPos.itemSize, gl.FLOAT, false, 0, 0);
+
+      gl.uniform3f(shaderProgram.uColor, 0 / 255, 255 / 255, 0 / 255);
+      gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+
+      gl.drawArrays(gl.TRIANGLES, 0, buffers.selStarPos.numItems);
+    }
+
+    /*for (var i=0; i<capitals.length; i++) {
+      var town = capitals[i];
+      var r = Math.floor(Math.sqrt(town.p / 300));
+      if (r < 2) r = 2;
+      r *= 2;
+      if (town == map_state.sel_cap) r *= 1.2;
+      var x = town.x1 - r, y = MAP_WIDTH - town.y1 - r;
+      mat4.identity(mvMatrix);
+      mat4.translate(mvMatrix, [x, y, -1.0]);
+      mat4.scale(mvMatrix, [r / 64, r / 64, 1.0]);
+      var color = (town == map_state.sel_cap ?  { r: 0, g: 255, b: 0 } : { r: 232, g: 222, b: 49 })
+
+      gl.uniform3f(shaderProgram.uColor, color.r / 255, color.g / 255, color.b / 255);
+      gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+      gl.drawArrays(gl.TRIANGLES, 0, buffers.starsPos.numItems);
+    }*/
+  }
+}
+
+function paint2D() {
+  var ctx = $("#map")[0].getContext("2d");
+
+  //clear canvas or paint background image
+
+  if ($("#show_map").is(':checked')) {
+    ctx.drawImage(bg_tex.image, 0, 0, MAP_WIDTH, MAP_WIDTH);
+    if (overlay.mode == OVR_NONE) {
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.rect(0, 0, MAP_WIDTH, MAP_WIDTH);
+      ctx.fillStyle = "black";
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+  else ctx.clearRect(0, 0, MAP_WIDTH, MAP_WIDTH);
+
+  var imgd = ctx.getImageData(0, 0, MAP_WIDTH, MAP_WIDTH);
+
+  //paint overlays
+
+  if (overlay.mode != OVR_NONE) {
+      var alpha = 0.5, len = overlay.rgb.byteLength / 3;
+      if (!$("#show_map").is(':checked')) alpha = 0;
+      for (var i=0; i<len; i++) {
+        var idx = i * 4, idx1 = i * 3;
+        var grey = alpha * (0.34 * imgd.data[idx] + 0.5 * imgd.data[idx + 1] + 0.16 * imgd.data[idx + 2]);
+        imgd.data[idx] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1]);
+        imgd.data[idx + 1] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 1]);
+        imgd.data[idx + 2] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 2]);
+        imgd.data[idx + 3] = 255;
+      }
+  }
+
+  //paint towns
+
+  if ($("#show_towns").is(':checked'))
+    for (var i=0; i<data.towns.length; i++) {
+      var town = data.towns[i];
+      if (town.c != 1) {
+        var idx = (town.x1 + (town.y1 * MAP_WIDTH)) * 4;
+        imgd.data[idx] = 0;
+        imgd.data[idx + 1] = 0;
+        imgd.data[idx + 2] = 255;
+        imgd.data[idx + 3] = 255;
+      }
+    }
+
+  ctx.putImageData(imgd, 0, 0);
+
+  //paint capitals
+
+  if ($("#show_capitals").is(':checked'))
+    for (var i=0; i<capitals.length; i++) {
+      var town = capitals[i];
+      var r = Math.floor(Math.sqrt(town.p / 300));
+      if (r < 2) r = 2;
+      ctx.beginPath();
+      var grd = ctx.createRadialGradient(town.x1, town.y1, 1, town.x1, town.y1, r);
+      grd.addColorStop(0, 'rgba(232,222,49,1)');
+      grd.addColorStop(1, 'rgba(232,222,49,0)');
+      ctx.fillStyle = grd;
+      ctx.arc(town.x1, town.y1, r, 0, Math.PI*2, false);
+      ctx.fill();
+    }
+
+  //paint selected capital infobox
+
+  if (map_state.sel_cap)
+    info_box(ctx, map_state.sel_cap.x1 + 20, map_state.sel_cap.y1 - 10, [
+      { text: map_state.sel_cap.name, italic: true },
+      { text: "capital of " + map_state.sel_cap.alliance },
+      { text: "population " + map_state.sel_cap.p }
+    ]);
+}
+
+
+
+
+
+// control *********************************************************************
 
 function map_mousemove(event) {
   var old_sel_cap = map_state.sel_cap;
@@ -108,8 +499,22 @@ function map_mousemove(event) {
           break;
         }
     }
-  if (map_state.sel_cap != old_sel_cap)
+  if (map_state.sel_cap != old_sel_cap) {
+    if (!map_state.sel_cap)
+      $("#infobox").hide();
+    else {
+      $("#infobox").html("<i>" + map_state.sel_cap.name + "</i><br />" +
+        "capital of " + map_state.sel_cap.alliance + "<br />" +
+        "population " + map_state.sel_cap.p);
+      var pos = $("#map").position();
+      $("#infobox").css({
+          position: "absolute",
+          top: (pos.top + town.y1 - 60) + "px",
+          left: (pos.left + town.x1 + 15) + "px"
+      }).show();
+    }
     paint();
+  }
 }
 
 function recompute_overlay() {
@@ -334,82 +739,13 @@ function compute_density(kernel) {
       val2rgb(overlay.density[i], overlay.max_density, i * 3);
 }
 
-function paint() {
-  var ctx = $("#map")[0].getContext("2d");
 
-  //clear canvas or paint background image
 
-  if ($("#show_map").is(':checked')) {
-    ctx.drawImage(bg_img, 0, 0, MAP_WIDTH, MAP_WIDTH);
-    if (overlay.mode == OVR_NONE) {
-      ctx.globalAlpha = 0.8;
-      ctx.beginPath();
-      ctx.rect(0, 0, MAP_WIDTH, MAP_WIDTH);
-      ctx.fillStyle = "black";
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-  }
-  else ctx.clearRect(0, 0, MAP_WIDTH, MAP_WIDTH);
 
-  var imgd = ctx.getImageData(0, 0, MAP_WIDTH, MAP_WIDTH);
 
-  //paint overlays
 
-  if (overlay.mode != OVR_NONE) {
-      var alpha = 0.5, len = overlay.rgb.byteLength / 3;
-      if (!$("#show_map").is(':checked')) alpha = 0;
-      for (var i=0; i<len; i++) {
-        var idx = i * 4, idx1 = i * 3;
-        var grey = alpha * (0.34 * imgd.data[idx] + 0.5 * imgd.data[idx + 1] + 0.16 * imgd.data[idx + 2]);
-        imgd.data[idx] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1]);
-        imgd.data[idx + 1] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 1]);
-        imgd.data[idx + 2] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 2]);
-        imgd.data[idx + 3] = 255;
-      }
-  }
 
-  //paint towns
 
-  if ($("#show_towns").is(':checked'))
-    for (var i=0; i<data.towns.length; i++) {
-      var town = data.towns[i];
-      if (town.c != 1) {
-        var idx = (town.x1 + (town.y1 * MAP_WIDTH)) * 4;
-        imgd.data[idx] = 0;
-        imgd.data[idx + 1] = 0;
-        imgd.data[idx + 2] = 255;
-        imgd.data[idx + 3] = 255;
-      }
-    }
-
-  ctx.putImageData(imgd, 0, 0);
-
-  //paint capitals
-
-  if ($("#show_capitals").is(':checked'))
-    for (var i=0; i<capitals.length; i++) {
-      var town = capitals[i];
-      var r = Math.floor(Math.sqrt(town.p / 300));
-      if (r < 2) r = 2;
-      ctx.beginPath();
-      var grd = ctx.createRadialGradient(town.x1, town.y1, 1, town.x1, town.y1, r);
-      grd.addColorStop(0, 'rgba(232,222,49,1)');
-      grd.addColorStop(1, 'rgba(232,222,49,0)');
-      ctx.fillStyle = grd;
-      ctx.arc(town.x1, town.y1, r, 0, Math.PI*2, false);
-      ctx.fill();
-    }
-
-  //paint selected capital infobox
-
-  if (map_state.sel_cap)
-    info_box(ctx, map_state.sel_cap.x1 + 20, map_state.sel_cap.y1 - 10, [
-      { text: map_state.sel_cap.name, italic: true },
-      { text: "capital of " + map_state.sel_cap.alliance },
-      { text: "population " + map_state.sel_cap.p }
-    ]);
-}
 
 // converts xml files from Illyriad (~17MB) to a more compact json (~1.3MB)
 // xml files should be mannually downloaded from Illyriad and put into the data folder
@@ -518,65 +854,6 @@ function val2rgb(val, max_val, idx) {
   if (r) overlay.rgb[idx] = Math.round(255 * Math.pow(r * factor, gamma));
   if (g) overlay.rgb[idx + 1] = Math.round(255 * Math.pow(g * factor, gamma));
   if (b) overlay.rgb[idx + 2] = Math.round(255 * Math.pow(b * factor, gamma));
-}
-
-// paint a transparent infobox
-
-function info_box(ctx, x, y, lines) {
-  var w = 0, h = 0, r = 4;
-
-  //complete line info with defaults & compute bounds
-
-  for (var i=0; i<lines.length; i++) {
-    var l = lines[i];
-    if (l.font === undefined) l.font = "Calibri";
-    if (l.height === undefined) l.height = 12;
-    if (l.italic === undefined) l.italic = false;
-    l.font_line = (l.italic ? "italic " : "") + l.height + "px " + l.font;
-    ctx.font = l.font_line;
-    var m = ctx.measureText(l.text);
-    l.width = m.width;
-    h += l.height;
-    if (w < l.width) w = l.width;
-  }
-  w += 2 * r;
-  h += 2 * r;
-
-  //fix position
-
-  if (x > MAP_WIDTH - w) x = MAP_WIDTH - w;
-  if (y > MAP_WIDTH - h) y = MAP_WIDTH - h;
-  if (y < 0) y = 0;
-  if (x < 0) x = 0;
-
-  //draw box
-
-  ctx.globalAlpha = 0.4;
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fillStyle = "yellow";
-  ctx.fill();
-
-  //draw text
-
-  ctx.globalAlpha = 1;
-  var text_y = y + r / 2, text_x = x + r;
-  ctx.fillStyle = "white";
-  for (var i=0; i<lines.length; i++) {
-    var l = lines[i];
-    text_y += l.height;
-    ctx.font = l.font_line;
-    ctx.fillText(l.text, text_x, text_y);
-  }
 }
 
 function show_progress(percent) {
