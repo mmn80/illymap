@@ -105,7 +105,7 @@
         vec2 sum = vec2(0.0);
         for (int i = 0; i < 300; i++) {
           if (i == uKernelSize) break;
-          float delta = 0.0005 * (float(i) - floor(float(uKernelSize) / 2.0));
+          float delta = 0.001 * (float(i) - floor(float(uKernelSize) / 2.0));
           if (!vertPass) {
             sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t));
             sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t));
@@ -113,7 +113,7 @@
             sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t + 0.0005));
           }
           else {
-            vec2 pos = vec2(coord.s, coord.t + delta * 2.0);
+            vec2 pos = vec2(coord.s, coord.t + delta);
             if (pos.t >= 0.0 && pos.t <= 1.0)
               sum += uKernel[i] * texture2D(uOvr0Sampler, pos).rg;
           }
