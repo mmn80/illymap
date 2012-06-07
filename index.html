@@ -2,54 +2,152 @@
 <html>
   <head>
     <meta charset='utf-8' />
-    <meta http-equiv="X-UA-Compatible" content="chrome=1" />
     <meta name="description" content="Illymap : Illyriad Map Analytics" />
     <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
-    <script src="javascripts/jquery-1.7.2.min.js" type="text/javascript"></script>
-    <script src="javascripts/gl-matrix-1.3.5-min.js" type="text/javascript"></script>
-    <script src="javascripts/main.js" type="text/javascript"></script>
-    <script id="shader-fs" type="x-shader/x-fragment">
+    <script type="text/javascript" src="javascripts/jquery-1.7.2.min.js"></script>
+    <script type="text/javascript" src="javascripts/gl-matrix-1.3.5-min.js"></script>
+    <script type="text/javascript" src="javascripts/main.js"></script>
+    <script id="main_shader-fs" type="x-shader/x-fragment">
       precision mediump float;
 
       uniform sampler2D uMapSampler;
       uniform sampler2D uStarSampler;
       uniform sampler2D uTownsSampler;
+      uniform sampler2D uOverlaySampler;
 
       uniform bool uGreyBg;
       uniform bool uStars;
-      uniform vec3 uColor;
+      uniform vec3 uStarColor;
       uniform bool uShowTowns;
+      uniform bool uShowBg;
+      uniform bool uShowOverlay;
 
       varying vec2 vTextureCoord;
 
       void main(void) {
         if (uStars) {
           vec4 textureColor = texture2D(uStarSampler, vec2(vTextureCoord.s, vTextureCoord.t));
-          gl_FragColor = textureColor * vec4(uColor, 1.0);
+          gl_FragColor = textureColor * vec4(uStarColor, 1.0);
         }
         else {
           bool is_town = false;
           if (uShowTowns) {
-            vec2 pos = vTextureCoord * 0.48828125; // 0.48828125 = 1000 / 1024 * 0.5; 0.00012207 = 0.48828125 / 4000
-            is_town = (texture2D(uTownsSampler, vec2(pos.s, pos.t)) != vec4(0.0, 0.0, 0.0, 0.0));
-            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(pos.s + 0.00012207, pos.t)) != vec4(0.0, 0.0, 0.0, 0.0));
-            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(pos.s, pos.t + 0.00012207)) != vec4(0.0, 0.0, 0.0, 0.0));
-            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(pos.s + 0.00012207, pos.t + 0.00012207)) != vec4(0.0, 0.0, 0.0, 0.0));
+            is_town = (texture2D(uTownsSampler, vTextureCoord) != vec4(0.0, 0.0, 0.0, 0.0));
+            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(vTextureCoord.s + 0.0005, vTextureCoord.t)) != vec4(0.0, 0.0, 0.0, 0.0));
+            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(vTextureCoord.s, vTextureCoord.t + 0.0005)) != vec4(0.0, 0.0, 0.0, 0.0));
+            if (!is_town) is_town = (texture2D(uTownsSampler, vec2(vTextureCoord.s + 0.0005, vTextureCoord.t + 0.0005)) != vec4(0.0, 0.0, 0.0, 0.0));
           }
           if (is_town)
             gl_FragColor = vec4(0.0, 0.0, 1.0, 1.0);
           else {
-            gl_FragColor = texture2D(uMapSampler, vec2(vTextureCoord.s, vTextureCoord.t));
-            if (uGreyBg) {
-              float grey = (0.34 * gl_FragColor.r + 0.5 * gl_FragColor.g + 0.16 * gl_FragColor.b);
-              gl_FragColor = vec4(grey, grey, grey, gl_FragColor[3]);
+            if (uShowBg) {
+              gl_FragColor = texture2D(uMapSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+              if (uGreyBg) {
+                float grey = (0.34 * gl_FragColor.r + 0.5 * gl_FragColor.g + 0.16 * gl_FragColor.b);
+                gl_FragColor = vec4(grey, grey, grey, gl_FragColor[3]);
+              }
+            }
+            if (uShowOverlay) {
+              vec4 col = texture2D(uOverlaySampler, vTextureCoord);
+              if (uShowBg) gl_FragColor = 0.5 * gl_FragColor + 0.5 * col;
+              else gl_FragColor = col;
             }
           }
         }
       }
     </script>
+    <script id="gauss-fs" type="x-shader/x-fragment">
+      precision mediump float;
 
-    <script id="shader-vs" type="x-shader/x-vertex">
+      uniform sampler2D uTownsSampler;
+      uniform sampler2D uOvr0Sampler;
+      uniform float uKernel[300];
+      uniform int uKernelSize;
+      uniform int uRace;
+      uniform int uPass;
+      uniform float uNormFactor;
+
+      varying vec2 vTextureCoord;
+
+      const float gamma = 0.8;
+
+      vec4 val2rgb(float val, float max_val) {
+        vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
+        float factor = 0.0, r = 0.0, g = 0.0, b = 0.0;
+        float wavelen = 380.0 + 400.0 * val / max_val;
+        if (wavelen >= 380.0 && wavelen < 440.0) { r = -(wavelen - 440.0) / 60.0; b = 1.0; }
+        else if (wavelen < 490.0) { g = (wavelen - 440.0) / 50.0; b = 1.0; }
+        else if (wavelen < 510.0) { g = 1.0; b = -(wavelen - 510.0) / 20.0; }
+        else if (wavelen < 580.0) { r = (wavelen - 510.0) / 70.0; g = 1.0; }
+        else if (wavelen < 645.0) { r = 1.0; g = -(wavelen - 645.0) / 65.0; }
+        else if (wavelen < 780.0) r = 1.0;
+        if (wavelen >= 380.0 && wavelen < 420.0)
+          factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
+        else if (wavelen < 700.0)
+          factor = 1.0;
+        else if (wavelen < 780.0)
+          factor = 0.3 + 0.7 * (780.0 - wavelen) / 80.0;
+        if (r > 0.0) color.r = pow(r * factor, gamma);
+        if (g > 0.0) color.g = pow(g * factor, gamma);
+        if (b > 0.0) color.b = pow(b * factor, gamma);
+        return color;
+      }
+
+      vec2 getSampleHoriz(vec2 coord) {
+        if (coord.s < 0.0 || coord.s > 1.0) return vec2(0.0);
+        vec4 sample = texture2D(uTownsSampler, coord);
+        if (uRace == -1 || uRace == int(sample.a * 256.0))
+          return vec2(sample.r, sample.g);
+        return vec2(0.0);
+      }
+
+      vec2 apply_kernel(vec2 coord, bool vertPass) {
+        vec2 sum = vec2(0.0);
+        for (int i = 0; i < 300; i++) {
+          if (i == uKernelSize) break;
+          float delta = 0.0005 * (float(i) - floor(float(uKernelSize) / 2.0));
+          if (!vertPass) {
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t));
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t));
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t + 0.0005));
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t + 0.0005));
+          }
+          else {
+            vec2 pos = vec2(coord.s, coord.t + delta * 2.0);
+            if (pos.t >= 0.0 && pos.t <= 1.0)
+              sum += uKernel[i] * texture2D(uOvr0Sampler, pos).rg;
+          }
+        }
+        sum.r *= uNormFactor;
+        sum.g *= uNormFactor;
+        if (sum.g > 1.0) {
+          float val = floor(sum.g);
+          sum.r += val / 256.0;
+          sum.g -= val;
+        }
+        return sum;
+      }
+
+      void main(void) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        if (uPass == 0 || uPass == 2) {
+          for (int i = 0; i < 10; i++)
+            for (int j = 0; j < 10; j++) {
+              vec2 sum = apply_kernel(vTextureCoord + vec2(float(i) * 0.001, float(j) * 0.001), uPass == 2);
+              if (sum.r >= gl_FragColor.r) {
+                gl_FragColor.r = sum.r;
+                if (sum.g > gl_FragColor.g) gl_FragColor.g = sum.g;
+              }
+            }
+        }
+        else if (uPass == 1 || uPass == 3) {
+          vec2 sum = apply_kernel(vTextureCoord, uPass == 3);
+          if (uPass == 3) gl_FragColor = val2rgb(sum.r * 256.0 + sum.g, 256.0);
+          else gl_FragColor = vec4(sum.r, sum.g, 0.0, 1.0);
+        }
+      }
+    </script>
+    <script id="main_shader-vs" type="x-shader/x-vertex">
       attribute vec3 aVertexPosition;
       attribute vec2 aTextureCoord;
 
@@ -79,7 +177,7 @@
             <div id="pos_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">[ 0 : 0 ]</div>
           </div>
           <div class="ui_panel">
-            <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Population overlays should take a few seconds on a decent computer. Race partition should be roughly 5x, in both CPU and memory. Alliance partition is the heaviest computation, and it will eat memory proportional to the maximum number of alliances that have influence over a single spot. To decrease that chance, use a smaller sigma.">Overlay:</label>
+            <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Alliance partition is the heaviest computation, and it will eat memory proportional to the maximum number of alliances that have influence over a single spot. To decrease that chance, use a smaller sigma.">Overlay:</label>
             <select id="overlay_mode">
               <option value="none" selected="selected">None</option>
               <option value="pop">Population</option>
@@ -91,7 +189,7 @@
               <option value="par:alliances">Alliances (Partition)</option>
               <option value="par:confeds">Confederations (Partition)</option>
             </select><br />
-            <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays, but increase CPU time (memory unchanged). Note that the units are map-units, and the map is 1:2 vs. in-game squares.">Sigma:</label>
+            <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, and the map is 1:2 vs. in-game squares.">Sigma:</label>
             <select id="std_dev">
               <option value="2">2</option>
               <option value="5">5</option>

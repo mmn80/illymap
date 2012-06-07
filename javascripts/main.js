@@ -14,6 +14,7 @@ var OVR_PAR_RACES = "races", OVER_PAR_ALLIANCES = "alliances",
 var PAR_COLORS = [ [0xFF,0,0]/*red*/, [0,0xFF,0]/*lime*/, [0,0,0xFF]/*blue*/, [0xFF,0xFF,0]/*yellow*/, [0,0xFF,0xFF]/*cyan*/,
   [0xFF,0,0xFF]/*fuchsia*/, [0xFF,0xA5,0]/*orange*/, [0,0x80,0]/*green*/, [0x80,0x80,0]/*olive*/, [0,0,0xA0]/*darkblue*/,
   [0xA5,0x2A,0x2A]/*brown*/, [0x80,0,0x80]/*purple*/, [0xAD,0xD8,0xE6]/*lightblue*/, [0x80,0,0]/*maroon*/, [0xC0,0xC0,0xC0]/*silver*/ ];
+var KERNEL_UNIFORM_SIZE = 300;
 
 var data = { server: "", date: "", alliances: [], towns: [] }; // data loaded from the json file, generated based on the Illy-supplied xmls
 
@@ -28,7 +29,7 @@ var overlay = {    // object containing overlay data
   rgb: null,       // OUT: overlay rgb Uint8Array; this is the end result of all overlay computations
   std_dev: 15,     // IN: standard deviation
   mode: OVR_NONE,  // IN: overlay mode
-  race: "",        // IN: race filter: "", "E", "H", "D", "O"
+  race: -1,        // IN: race filter code (-1 = no filter)
   par_mode: "",    // IN: partition submode
   density: null,   // MAP_WIDTHxMAP_WIDTH Float32Array, values represent populations; used for OVR_POP overlays
   max_density: 0,  // max value in the density matrix (used for normalization)
@@ -45,7 +46,8 @@ var overlay = {    // object containing overlay data
   kernels: []      // precomputed gaussian distributions of form { std_dev: val, buffer: Float32Array }
 }
 
-var gl, shaderProgram;
+var gl;
+var shaders = { main: null, gauss: null }
 var mvMatrix = mat4.create(), pMatrix = mat4.create();
 var buffers = {
   mapPos: null,
@@ -58,10 +60,15 @@ var buffers = {
 var textures = {
   bg_map: null,
   star: null,
-  towns: null   // r;g = floor(population / 4)
-                // b;a[7];a[6] = alliance index OR
-                // OR b = confed index
-                // a[1];a[0] = race index
+  towns: null,
+  overlay_0: null,
+  overlay_1: null,
+  overlay_2: null,
+}
+var fbs = {
+  overlay_0: null,
+  overlay_1: null,
+  overlay_2: null,
 }
 
 
@@ -96,9 +103,9 @@ $(document).ready(function () {
     star_loaded = true;
     if (data_loaded && bg_loaded) init_data();
   };
-  $("#show_map").change(paint);
-  $("#show_towns").change(paint);
-  $("#show_capitals").change(paint);
+  $("#show_map").change(draw);
+  $("#show_towns").change(draw);
+  $("#show_capitals").change(draw);
   $("#overlay_mode").change(recompute_overlay);
   $("#std_dev").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
@@ -137,21 +144,36 @@ function init_data() {
   capitals.sort(function(a, b) { // we need this for proper mouse over triggering when capitals overlap
     return a.p - b.p;
   });
+  init_kernels();
   init_data_buffers();
   init_towns_tex();
-  paint();
+  draw();
+}
+
+function init_kernels() {
+  $("#std_dev option").each(function() {
+    var kernel = { std_dev: $(this).val() };
+    var half = 3 * kernel.std_dev; // 3*sigma coverage => less then 1% loss
+    kernel.buffer = new Float32Array(new ArrayBuffer(4 * (1 + 2 * half)));
+    var factor1 = 2 * Math.pow(kernel.std_dev, 2), factor2 = kernel.std_dev * Math.sqrt(2 * Math.PI);
+    for (var x=0; x<kernel.buffer.length; x++)
+      kernel.buffer[x] = Math.exp(-Math.pow(x-half, 2) / factor1) / factor2;
+    overlay.kernels.push(kernel);
+  });
 }
 
 function init_webgl() {
-  var canvas = $("#map")[0];
+  var canvas = $("#map")[0], err = "";
   try {
-    gl = canvas.getContext("experimental-webgl");
+    gl = canvas.getContext("experimental-webgl", { preserveDrawingBuffer: true });
     gl.viewportWidth = canvas.width;
     gl.viewportHeight = canvas.height;
   }
-  catch (e) {}
+  catch (e) {
+    err = "\n" + e;
+  }
   if (!gl) {
-    alert("Could not initialise WebGL, sorry :-(");
+    alert("Could not initialise WebGL, sorry :-(" + err);
     return false;
   }
   else {
@@ -161,45 +183,86 @@ function init_webgl() {
     textures.bg_map.image = new Image();
     textures.star = gl.createTexture();
     textures.star.image = new Image();
+    init_overlay_fb_tex();
     gl.clearColor(0.0, 0.0, 0.0, 1.0);
     return true;
   }
 }
 
 function init_shaders() {
-  var fragmentShader = get_shader(gl, "shader-fs");
-  var vertexShader = get_shader(gl, "shader-vs");
+  shaders.main = create_program("main_shader-fs", "main_shader-vs");
+  if (!shaders.main) return false;
+  shaders.main.uMapSampler = gl.getUniformLocation(shaders.main, "uMapSampler");
+  shaders.main.uOverlaySampler = gl.getUniformLocation(shaders.main, "uOverlaySampler");
+  shaders.main.uStarSampler = gl.getUniformLocation(shaders.main, "uStarSampler");
+  shaders.main.uTownsSampler = gl.getUniformLocation(shaders.main, "uTownsSampler");
+  shaders.main.uShowBg = gl.getUniformLocation(shaders.main, "uShowBg");
+  shaders.main.uGreyBg = gl.getUniformLocation(shaders.main, "uGreyBg");
+  shaders.main.uShowTowns = gl.getUniformLocation(shaders.main, "uShowTowns");
+  shaders.main.uShowOverlay = gl.getUniformLocation(shaders.main, "uShowOverlay");
+  shaders.main.uStarColor = gl.getUniformLocation(shaders.main, "uStarColor");
+  shaders.main.uStars = gl.getUniformLocation(shaders.main, "uStars");
+  shaders.gauss = create_program("gauss-fs", "main_shader-vs");
+  if (!shaders.gauss) return false;
+  shaders.gauss.uTownsSampler = gl.getUniformLocation(shaders.gauss, "uTownsSampler");
+  shaders.gauss.uOvr0Sampler = gl.getUniformLocation(shaders.gauss, "uOvr0Sampler");
+  shaders.gauss.uKernel = [];
+  for (var i=0; i<KERNEL_UNIFORM_SIZE; i++)
+    shaders.gauss.uKernel.push(gl.getUniformLocation(shaders.gauss, "uKernel[" + i + "]"));
+  shaders.gauss.uKernelSize = gl.getUniformLocation(shaders.gauss, "uKernelSize");
+  shaders.gauss.uRace = gl.getUniformLocation(shaders.gauss, "uRace");
+  shaders.gauss.uPass = gl.getUniformLocation(shaders.gauss, "uPass");
+  shaders.gauss.uNormFactor = gl.getUniformLocation(shaders.gauss, "uNormFactor");
+  return true;
+}
 
-  shaderProgram = gl.createProgram();
-  gl.attachShader(shaderProgram, vertexShader);
-  gl.attachShader(shaderProgram, fragmentShader);
-  gl.linkProgram(shaderProgram);
-
-  if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+function create_program(vs_script_id, fs_script_id) {
+  var fragment_shader = get_shader(gl, fs_script_id);
+  var vertex_shader = get_shader(gl, vs_script_id);
+  var program = gl.createProgram();
+  gl.attachShader(program, vertex_shader);
+  gl.attachShader(program, fragment_shader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
     alert("Could not initialise shaders.");
-    return false;
+    return null;
   }
-  else {
-    gl.useProgram(shaderProgram);
+  program.aVertexPosition = gl.getAttribLocation(program, "aVertexPosition");
+  gl.enableVertexAttribArray(program.aVertexPosition);
+  program.aTextureCoord = gl.getAttribLocation(program, "aTextureCoord");
+  gl.enableVertexAttribArray(program.aTextureCoord);
+  program.uPMatrix = gl.getUniformLocation(program, "uPMatrix");
+  program.uMVMatrix = gl.getUniformLocation(program, "uMVMatrix");
+  return program;
+}
 
-    shaderProgram.aVertexPosition = gl.getAttribLocation(shaderProgram, "aVertexPosition");
-    gl.enableVertexAttribArray(shaderProgram.aVertexPosition);
+function init_overlay_fb_tex() {
+  var attach_tex = function(size) {
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+    return tex;
+  };
 
-    shaderProgram.aTextureCoord = gl.getAttribLocation(shaderProgram, "aTextureCoord");
-    gl.enableVertexAttribArray(shaderProgram.aTextureCoord);
+  fbs.overlay_0 = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_0);
+  textures.overlay_0 = attach_tex(MAP_WIDTH / 10);
 
-    shaderProgram.uPMatrix = gl.getUniformLocation(shaderProgram, "uPMatrix");
-    shaderProgram.uMVMatrix = gl.getUniformLocation(shaderProgram, "uMVMatrix");
-    shaderProgram.uMapSampler = gl.getUniformLocation(shaderProgram, "uMapSampler");
-    shaderProgram.uTownsSampler = gl.getUniformLocation(shaderProgram, "uTownsSampler");
-    shaderProgram.uStarSampler = gl.getUniformLocation(shaderProgram, "uStarSampler");
-    shaderProgram.uGreyBg = gl.getUniformLocation(shaderProgram, "uGreyBg");
-    shaderProgram.uShowTowns = gl.getUniformLocation(shaderProgram, "uShowTowns");
-    shaderProgram.uColor = gl.getUniformLocation(shaderProgram, "uColor");
-    shaderProgram.uStars = gl.getUniformLocation(shaderProgram, "uStars");
+  fbs.overlay_1 = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_1);
+  textures.overlay_1 = attach_tex(MAP_WIDTH);
 
-    return true;
-  }
+  fbs.overlay_2 = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_2);
+  textures.overlay_2 = attach_tex(MAP_WIDTH);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindTexture(gl.TEXTURE_2D, null);
 }
 
 function init_static_buffers() {
@@ -214,6 +277,18 @@ function init_static_buffers() {
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
   buffers.mapPos.itemSize = 3;
   buffers.mapPos.numItems = 4;
+
+  buffers.maxPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.maxPos);
+  vertices = [
+       0.0, 0.0,  0.0,
+       MAP_WIDTH / 10,  0.0,  0.0,
+       0.0,  MAP_WIDTH / 10,  0.0,
+       MAP_WIDTH / 10,  MAP_WIDTH / 10,  0.0
+  ];
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+  buffers.maxPos.itemSize = 3;
+  buffers.maxPos.numItems = 4;
 
   buffers.mapTexPos = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
@@ -293,26 +368,29 @@ function init_data_buffers() {
 }
 
 function init_towns_tex() {
-  var buffer = new Uint8Array(new ArrayBuffer(2048 * 2048 * 4));
+  var buffer = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH * 16));
+  var max_pop = 0;
+  for (var i=0; i<data.towns.length; i++)
+    if (data.towns[i].p > max_pop)
+      max_pop = data.towns[i].p;
+  var factor = 65536 / max_pop;
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
-    var idx = (town.x1 + (town.y1 * 2048)) * 4;
-    var p = Math.floor(town.p / 4);
-    var r = 0;
-    if (town.r == "H") r = 1;
-    else if (town.r == "D") r = 2;
-    else if (town.r == "O") r = 3;
+    var idx = (town.x + MAP_WIDTH + ((town.y + MAP_WIDTH) * MAP_WIDTH * 2)) * 4;
+    var p = Math.floor(town.p * factor);
     buffer[idx] = Math.floor(p / 256);
     buffer[idx + 1] = p % 256;
     buffer[idx + 2] = 0; // alliance index
-    buffer[idx + 3] = r;
+    buffer[idx + 3] = get_race_code(town.r);
   }
   textures.towns = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, textures.towns);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2048, 2048, 0, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2 * MAP_WIDTH, 2 * MAP_WIDTH, 0, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.bindTexture(gl.TEXTURE_2D, null);
 }
 
@@ -321,13 +399,15 @@ function init_towns_tex() {
 
 
 
-// paint ************************************************************************
 
-function paint() {
+// draw ************************************************************************
+
+function draw() {
   var v_map = $("#show_map").is(':checked');
   var v_tow = $("#show_towns").is(':checked');
   var v_cap = $("#show_capitals").is(':checked');
 
+  gl.useProgram(shaders.main);
   gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
@@ -336,148 +416,148 @@ function paint() {
   //gl.disable(gl.DEPTH_TEST);
 
   mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
-  gl.uniformMatrix4fv(shaderProgram.uPMatrix, false, pMatrix);
+  gl.uniformMatrix4fv(shaders.main.uPMatrix, false, pMatrix);
 
-  // paint background map
+  // draw background map and/or overlay
 
   gl.activeTexture(gl.TEXTURE2);
   gl.bindTexture(gl.TEXTURE_2D, textures.towns);
-  gl.uniform1i(shaderProgram.uTownsSampler, 2);
-  gl.uniform1i(shaderProgram.uShowTowns, v_tow);
+  gl.uniform1i(shaders.main.uTownsSampler, 2);
 
-  if (v_map) {
+  gl.uniform1i(shaders.main.uShowBg, v_map);
+  gl.uniform1i(shaders.main.uShowTowns, v_tow);
+  gl.uniform1i(shaders.main.uShowOverlay, overlay.mode != OVR_NONE);
+
+  if (v_map || v_tow || overlay.mode != OVR_NONE) {
     mat4.identity(mvMatrix);
     mat4.translate(mvMatrix, [0.0, 0.0, -5.0]);
-    paint_map(v_cap || v_tow || overlay.mode != OVR_NONE);
+    if (overlay.mode != OVR_NONE) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, textures.overlay_2);
+      gl.uniform1i(shaders.main.uOverlaySampler, 3);
+    }
+    draw_map(v_map, v_cap || v_tow || overlay.mode != OVR_NONE);
   }
 
-  // paint capitals
+  // draw capitals
 
   if (v_cap) {
     mat4.identity(mvMatrix);
-    paint_stars(buffers.starsPos, buffers.starsTexPos, { r: 232, g: 222, b: 49 });
+    draw_stars(buffers.starsPos, buffers.starsTexPos, { r: 232, g: 222, b: 49 });
     if (map_state.sel_cap) {
       var pos = get_town_pos(map_state.sel_cap, true);
       mat4.identity(mvMatrix);
       mat4.translate(mvMatrix, [pos.x, pos.y, -1.0]);
       mat4.scale(mvMatrix, [pos.scale, pos.scale, 1.0]);
-      paint_stars(buffers.selStarPos, buffers.selStarTexPos, { r: 0, g: 255, b: 0 });
+      draw_stars(buffers.selStarPos, buffers.selStarTexPos, { r: 0, g: 255, b: 0 });
     }
   }
 }
 
-function paint_map(grayed) {
+function draw_overlay() {
+  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
+  mat4.identity(mvMatrix);
+  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
+
+  // global initialization
+
+  gl.useProgram(shaders.gauss);
+
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  gl.uniform1i(shaders.gauss.uTownsSampler, 2);
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_1);
+  gl.uniform1i(shaders.gauss.uOvr0Sampler, 4);
+
+  gl.uniform1i(shaders.gauss.uRace, overlay.race);
+  gl.uniformMatrix4fv(shaders.gauss.uPMatrix, false, pMatrix);
+  gl.uniformMatrix4fv(shaders.gauss.uMVMatrix, false, mvMatrix);
+  gl.uniform1f(shaders.gauss.uNormFactor, 1.0);
+  var kernel = null;
+  for (var i=0; i<overlay.kernels.length; i++)
+    if (overlay.kernels[i].std_dev == overlay.std_dev) {
+      kernel = overlay.kernels[i].buffer;
+      break;
+    }
+  gl.uniform1i(shaders.gauss.uKernelSize, kernel.length);
+  for (var i=0; i<kernel.length && i<KERNEL_UNIFORM_SIZE; i++)
+    gl.uniform1f(shaders.gauss.uKernel[i], kernel[i]);
+
+  // passes
+
+  var overlay_pass = function(pass, fb, get_max_pass) {
+    var vtx_buffer = (get_max_pass ? buffers.maxPos : buffers.mapPos);
+    gl.uniform1i(shaders.gauss.uPass, pass);
+    if (get_max_pass) gl.uniform1f(shaders.gauss.uNormFactor, 1.0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
+    gl.vertexAttribPointer(shaders.gauss.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
+    gl.vertexAttribPointer(shaders.gauss.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, vtx_buffer.numItems);
+    if (get_max_pass) {
+      var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
+      gl.readPixels(0, 0, MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      var max_val = 0;
+      for (var i=0; i<pixels.length; i+=4) {
+        var val = pixels[i] * 256 + pixels[i + 1];
+        if (val > max_val)
+          max_val = val;
+      }
+      gl.uniform1f(shaders.gauss.uNormFactor, 65536 / max_val);
+    }
+  };
+
+  overlay_pass(0, fbs.overlay_0, true);
+  overlay_pass(1, fbs.overlay_1, false);
+
+  overlay_pass(2, fbs.overlay_0, true);
+  overlay_pass(3, fbs.overlay_2, false);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  draw();
+}
+
+function draw_map(v_map, grayed) {
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
-  gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(shaders.main.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
-  gl.vertexAttribPointer(shaderProgram.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(shaders.main.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
 
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, textures.bg_map);
-  gl.uniform1i(shaderProgram.uMapSampler, 0);
+  if (v_map) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, textures.bg_map);
+    gl.uniform1i(shaders.main.uMapSampler, 0);
+  }
 
-  gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
-  gl.uniform1i(shaderProgram.uGreyBg, grayed);
-  gl.uniform1i(shaderProgram.uStars, false);
+  gl.uniformMatrix4fv(shaders.main.uMVMatrix, false, mvMatrix);
+  gl.uniform1i(shaders.main.uGreyBg, grayed);
+  gl.uniform1i(shaders.main.uStars, false);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.mapPos.numItems);
 }
 
-function paint_stars(vtx_buffer, tex_buffer, color) {
+function draw_stars(vtx_buffer, tex_buffer, color) {
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
-  gl.vertexAttribPointer(shaderProgram.aTextureCoord, buffers.starsTexPos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(shaders.main.aTextureCoord, buffers.starsTexPos.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
-  gl.vertexAttribPointer(shaderProgram.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(shaders.main.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, textures.star);
 
-  gl.uniform1i(shaderProgram.uStarSampler, 1);
-  gl.uniform1i(shaderProgram.uStars, true);
-  gl.uniform3f(shaderProgram.uColor, color.r / 255, color.g / 255, color.b / 255);
-  gl.uniformMatrix4fv(shaderProgram.uMVMatrix, false, mvMatrix);
+  gl.uniform1i(shaders.main.uStarSampler, 1);
+  gl.uniform1i(shaders.main.uStars, true);
+  gl.uniform3f(shaders.main.uStarColor, color.r / 255, color.g / 255, color.b / 255);
+  gl.uniformMatrix4fv(shaders.main.uMVMatrix, false, mvMatrix);
 
   gl.drawArrays(gl.TRIANGLES, 0, tex_buffer.numItems);
 }
 
-function paint2D() {
-  var ctx = $("#map")[0].getContext("2d");
-
-  //clear canvas or paint background image
-
-  if ($("#show_map").is(':checked')) {
-    ctx.drawImage(textures.bg_map.image, 0, 0, MAP_WIDTH, MAP_WIDTH);
-    if (overlay.mode == OVR_NONE) {
-      ctx.globalAlpha = 0.8;
-      ctx.beginPath();
-      ctx.rect(0, 0, MAP_WIDTH, MAP_WIDTH);
-      ctx.fillStyle = "black";
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-  }
-  else ctx.clearRect(0, 0, MAP_WIDTH, MAP_WIDTH);
-
-  var imgd = ctx.getImageData(0, 0, MAP_WIDTH, MAP_WIDTH);
-
-  //paint overlays
-
-  if (overlay.mode != OVR_NONE) {
-      var alpha = 0.5, len = overlay.rgb.byteLength / 3;
-      if (!$("#show_map").is(':checked')) alpha = 0;
-      for (var i=0; i<len; i++) {
-        var idx = i * 4, idx1 = i * 3;
-        var grey = alpha * (0.34 * imgd.data[idx] + 0.5 * imgd.data[idx + 1] + 0.16 * imgd.data[idx + 2]);
-        imgd.data[idx] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1]);
-        imgd.data[idx + 1] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 1]);
-        imgd.data[idx + 2] = Math.floor(grey + (1 - alpha) * overlay.rgb[idx1 + 2]);
-        imgd.data[idx + 3] = 255;
-      }
-  }
-
-  //paint towns
-
-  if ($("#show_towns").is(':checked'))
-    for (var i=0; i<data.towns.length; i++) {
-      var town = data.towns[i];
-      if (town.c != 1) {
-        var idx = (town.x1 + (town.y1 * MAP_WIDTH)) * 4;
-        imgd.data[idx] = 0;
-        imgd.data[idx + 1] = 0;
-        imgd.data[idx + 2] = 255;
-        imgd.data[idx + 3] = 255;
-      }
-    }
-
-  ctx.putImageData(imgd, 0, 0);
-
-  //paint capitals
-
-  if ($("#show_capitals").is(':checked'))
-    for (var i=0; i<capitals.length; i++) {
-      var town = capitals[i];
-      var r = Math.floor(Math.sqrt(town.p / 300));
-      if (r < 2) r = 2;
-      ctx.beginPath();
-      var grd = ctx.createRadialGradient(town.x1, town.y1, 1, town.x1, town.y1, r);
-      grd.addColorStop(0, 'rgba(232,222,49,1)');
-      grd.addColorStop(1, 'rgba(232,222,49,0)');
-      ctx.fillStyle = grd;
-      ctx.arc(town.x1, town.y1, r, 0, Math.PI*2, false);
-      ctx.fill();
-    }
-
-  //paint selected capital infobox
-
-  if (map_state.sel_cap)
-    info_box(ctx, map_state.sel_cap.x1 + 20, map_state.sel_cap.y1 - 10, [
-      { text: map_state.sel_cap.name, italic: true },
-      { text: "capital of " + map_state.sel_cap.alliance },
-      { text: "population " + map_state.sel_cap.p }
-    ]);
-}
 
 
 
@@ -516,7 +596,7 @@ function map_mousemove(event) {
           left: (pos.left + town.x1 + 15) + "px"
       }).show();
     }
-    paint();
+    draw();
   }
 }
 
@@ -526,11 +606,17 @@ function map_dblclick(event) {
   window.open(ILLY_MAP_URL.replace("{x}", x).replace("{y}", y), '_blank');
 }
 
+
+
+
+// compute
+
+
 function recompute_overlay() {
   overlay.std_dev = parseInt($("#std_dev").val());
   overlay.mode = $("#overlay_mode").val();
   if (overlay.mode.indexOf(OVR_POP) == 0) {
-    overlay.race = overlay.mode.substring(OVR_POP.length + 1);
+    overlay.race = get_race_code(overlay.mode.substring(OVR_POP.length + 1));
     overlay.mode = OVR_POP;
   }
   else if (overlay.mode.indexOf(OVR_PAR) == 0) {
@@ -538,35 +624,15 @@ function recompute_overlay() {
     overlay.mode = OVR_PAR;
   }
 
-  // search for cached Gaussian kernel
+  // compute density and rbg buffers, and draw
 
-  var kernel = null;
-  for (var i=0; i<overlay.kernels.length; i++)
-    if (overlay.kernels[i].std_dev == overlay.std_dev) {
-      kernel = overlay.kernels[i];
-      break;
-    }
-
-  // compute kernel
-
-  if (!kernel) {
-    kernel = { std_dev: overlay.std_dev };
-    var half = 3 * kernel.std_dev; // 3*sigma coverage => less then 1% loss
-    kernel.buffer = new Float32Array(new ArrayBuffer(4 * (1 + 2 * half)));
-    var factor1 = 2 * Math.pow(kernel.std_dev, 2), factor2 = kernel.std_dev * Math.sqrt(2 * Math.PI);
-    for (var x=0; x<kernel.buffer.length; x++)
-      kernel.buffer[x] = Math.exp(-Math.pow(x-half, 2) / factor1) / factor2;
-    overlay.kernels.push(kernel);
-  }
-
-  // compute density and rbg buffers, and paint
-
-  if (overlay.mode == OVR_POP)
+  /*if (overlay.mode == OVR_POP)
     compute_density(kernel);
   else if (overlay.mode == OVR_PAR)
-    compute_partitions(kernel);
+    compute_partitions(kernel);*/
 
-  paint();
+  if (overlay.mode != OVR_NONE) draw_overlay();
+  else draw();
 }
 
 function compute_partitions(kernel) {
@@ -840,7 +906,7 @@ function loadXml() {
 
 // utils *******************************************************************
 
-// converts scalar to light wavelength and then to to rgb; paints it on the rgb buffer
+// converts scalar to light wavelength and then to to rgb; draws it on the rgb buffer
 // algorithm snached from http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
 
 var gamma = 0.8;
@@ -901,4 +967,13 @@ function get_shader(gl, id) {
       return null;
   }
   return shader;
+}
+
+function get_race_code(race_str) {
+  var r = -1;
+  if (race_str == "E") r = 0;
+  else if (race_str == "H") r = 1;
+  else if (race_str == "D") r = 2;
+  else if (race_str == "O") r = 3;
+  return r;
 }
