@@ -1,37 +1,145 @@
+/* global **************************************************************/
+
+html, body, div, p, span, h1, h2, form, label, canvas, header, footer, section, a, input, select {
+  padding: 0;
+  margin: 0;
+  border: 0;
+  font: inherit;
+  vertical-align: baseline;
+}
+
 body {
-  box-sizing: border-box;
   color: #f2f2f2;
   background: #212121;
-  font-size: 16px;
+  font-size: 14px;
   font-family: 'Myriad Pro', Calibri, Helvetica, Arial, sans-serif;
   line-height: 1.5;
-  margin: 10px;
   -webkit-font-smoothing: antialiased;
 }
 
+
+
+
+/* layout ************************************************************/
+
+.outer {
+  width: 100%;
+}
+
+.inner {
+  display: block;
+  width: 1002px;
+  position: relative;
+  max-width: 1002px;
+  margin: 0 auto;
+}
+
+
+
+/* header ************************************************************/
+
+#header_left {
+  display: inline-block;
+  margin-top: 10px;
+}
+
 h1, h2, h3, h4, h5, h6 {
-  margin: 3px 0;
   font-weight: 700;
   font-family: 'Lucida Grande', 'Calibri', Helvetica, Arial, sans-serif;
-  letter-spacing: -1px;
 }
 
 h1 {
-  font-size: 34px;
+  font-size: 26px;
 }
 
 h2 {
-  font-size: 22px;
+  font-size: 18px;
 }
 
+
+
+
+/* UI panel ************************************************************/
+
+#header_right {
+  float: right;
+  display: inline-block;
+  width: 600px;
+  margin: 20px 0 0 0;
+  border: 1px solid #CCCCCC;
+  border-bottom: none;
+  border-radius: 8px 8px 0px 0px;
+  padding: 6px;
+  vertical-align: baseline;
+  background: #313131;
+}
+
+.ui_panel {
+  font-size: 12px;
+  display: inline-block;
+  height: 100%;
+  vertical-align: top;
+  padding: 0 10px 0 10px;
+}
+
+select {
+  width: 100px;
+  margin-bottom: 2px;
+}
+
+#overlay_mode_label, #std_dev_label {
+  display: inline-block;
+  width: 50px;
+}
+
+
+
+
+/* main content ************************************************************/
+
+canvas {
+  border: 1px solid #CCCCCC;
+  cursor: crosshair;
+}
+
+#jsondiv {
+  display: none;
+  position: absolute;
+  left: 100px;
+  top: 200px;
+  width: 800px;
+  height: 800px;
+  overflow: auto;
+}
+
+#pos_info {
+  display: inline;
+  position: relative;
+  padding-right: 5px;
+  margin: -1002px 0 0 0;
+  float: right;
+  text-align: right;
+  font-family: Andale Mono, Courier New, monospace;
+  font-weight: bold;
+  font-size: 14px;
+  color: lime;
+  text-shadow: #0090ff 0px 0px 2px;
+  line-height: 1;
+}
+
+
+
+
+/* footer **************************************************************/
+
 p {
-  margin: 10px 0 15px 0;
+  margin: 10px 0 10px 0;
 }
 
 a {
   text-decoration: none;
   color: #007edf;
-  text-shadow: none;
+  text -shadow: none;
 
   transition: color 0.5s ease;
   transition: text-shadow 0.5s ease;
@@ -50,63 +158,13 @@ a:hover {
   text-shadow: #0090ff 0px 0px 2px;
 }
 
-#jsondiv {
-  display: none;
-  position: absolute;
-  left: 100px;
-  top: 200px;
-  width: 800px;
-  height: 800px;
-  overflow: auto;
-}
 
-header {
-  display: block;
-}
 
-canvas {
-  border: none;
-}
 
-#header_left, #header_right {
-  display: inline-block;
-  height: 100%;
-}
-
-#header_right {
-  margin-left: 50px;
-  margin-top: 10px;
-  border: 1px solid #CCCCCC;
-  padding: 4px;
-  vertical-align: top;
-}
-
-.ui_panel {
-  font-size: 12px;
-  display: inline-block;
-  height: 100%;
-  vertical-align: top;
-  padding-right: 20px;
-}
-
-#pos_info {
-  font-weight: bold;
-  color: lime;
-}
+/* tooltips ************************************************************/
 
 #infobox {
   display: none;
-}
-
-#infobox, .tooltip::after {
-  position: absolute;
-  padding: 3px 7px;
-  border-radius: 8px 8px 8px 0px;
-  color: #FFF;
-  background: rgba(199, 159, 0, 0.8);
-  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.5);
-  font-size: 12px;
-  font-weight: normal;
 }
 
 .tooltip::after {
@@ -120,13 +178,16 @@ canvas {
 .tooltip:hover::after {
   opacity: 1;
   visibility: visible;
+  z-index: 1;
 }
 
-#overlay_mode_label, #std_dev_label {
-  display: inline-block;
-  width: 50px;
-}
-
-select {
-  width: 100px;
+#infobox, .tooltip::after {
+  position: absolute;
+  padding: 3px 7px;
+  border-radius: 8px 8px 8px 0px;
+  color: #FFF;
+  background: rgba(199, 159, 0, 0.8);
+  box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  font-weight: normal;
 }

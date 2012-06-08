@@ -110,6 +110,7 @@ $(document).ready(function () {
   $("#std_dev").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
   $("#map").mousemove(map_mousemove);
+  $("#map").mouseout(map_mouseout);
   $("#map").dblclick(map_dblclick);
   textures.bg_map.image.src = BG_IMAGE;
   textures.star.image.src = STAR_IMAGE;
@@ -568,9 +569,18 @@ function draw_stars(vtx_buffer, tex_buffer, color) {
 function map_mousemove(event) {
   var old_sel_cap = map_state.sel_cap;
   map_state.sel_cap = null;
-  map_state.mx = event.pageX - this.offsetLeft;
-  map_state.my = MAP_WIDTH - event.pageY + this.offsetTop;
-  $("#pos_info").html("[ " + (map_state.mx * 2 - MAP_WIDTH) + " : " + (map_state.my * 2 - MAP_WIDTH) + " ]");
+  var off = $("#map").offset();
+  map_state.mx = event.pageX - off.left;
+  map_state.my = MAP_WIDTH - event.pageY + off.top;
+  map_state.illy_x = map_state.mx * 2 - MAP_WIDTH
+  map_state.illy_y = map_state.my * 2 - MAP_WIDTH
+  var illyx = map_state.illy_x.toString(), illyy = map_state.illy_y.toString()
+  while (illyx.length < 4) illyx = " " + illyx;
+  while (illyy.length < 4) illyy = " " + illyy;
+  illyx = illyx.replace(/ /g, "&nbsp;");
+  illyy = illyy.replace(/ /g, "&nbsp;");
+  $("#pos_info").html("[" + illyx + ":" + illyy + "]");
+  $("#pos_info").show();
   if ($("#show_capitals").is(':checked'))
     for (var i=0; i<capitals.length; i++) {
         var town = capitals[i];
@@ -598,6 +608,10 @@ function map_mousemove(event) {
     }
     draw();
   }
+}
+
+function map_mouseout(event) {
+  $("#pos_info").hide();
 }
 
 function map_dblclick(event) {

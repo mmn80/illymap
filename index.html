@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset='utf-8' />
-    <meta name="description" content="Illymap : Illyriad Map Analytics" />
+    <meta name="description" content="Illymap : Illyriad Map Smelter" />
     <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
     <script type="text/javascript" src="javascripts/jquery-1.7.2.min.js"></script>
     <script type="text/javascript" src="javascripts/gl-matrix-1.3.5-min.js"></script>
@@ -161,64 +161,71 @@
         vTextureCoord = aTextureCoord;
       }
     </script>
-    <title>Illymap</title>
+    <title>Illymap - Illyriad Heat Map</title>
   </head>
 
   <body>
-    <header>
-      <div id="header_left">
-        <h1>Illymap</h1>
-        <h2>Illyriad Map Analytics</h2>
-      </div>
-      <div id="header_right">
-        <form name="ui_form">
-          <div class="ui_panel">
-            <div id="server_info">server:?<br/>date:?<br/></div>
-            <div id="pos_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">[ 0 : 0 ]</div>
-          </div>
-          <div class="ui_panel">
-            <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Alliance partition is the heaviest computation, and it will eat memory proportional to the maximum number of alliances that have influence over a single spot. To decrease that chance, use a smaller sigma.">Overlay:</label>
-            <select id="overlay_mode">
-              <option value="none" selected="selected">None</option>
-              <option value="pop">Population</option>
-              <option value="pop:E">Elves</option>
-              <option value="pop:H">Humans</option>
-              <option value="pop:D">Dwarves</option>
-              <option value="pop:O">Orcs</option>
-              <option value="par:races">Races (Partition)</option>
-              <option value="par:alliances">Alliances (Partition)</option>
-              <option value="par:confeds">Confederations (Partition)</option>
-            </select><br />
-            <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, and the map is 1:2 vs. in-game squares.">Sigma:</label>
-            <select id="std_dev">
-              <option value="2">2</option>
-              <option value="5">5</option>
-              <option value="10">10</option>
-              <option value="15" selected="selected">15</option>
-              <option value="20">20</option>
-              <option value="30">30</option>
-              <option value="50">50</option>
-            </select>
-          </div>
-          <div class="ui_panel">
-            <input id="show_map" type="checkbox" checked="checked" /><label for="show_map" class="tooltip" data-tooltip="Show the background map.">Show Map</label><br />
-            <input id="show_towns" type="checkbox" /><label for="show_towns" class="tooltip" data-tooltip="Show towns as blue dots on the map.">Show Towns</label><br />
-            <input id="show_capitals" type="checkbox" checked="checked" /><label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow stars. Mouse over them to see more information.">Show Capitals</label>
-          </div>
-          <div class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. This is a static app, and can work locally on a computer (copy all files). To update the dataset: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
-        </form>
-      </div>
-    </header>
+    <div class="outer">
+      <header class="inner">
+        <div id="header_left">
+          <h1>Illymap</h1>
+          <h2>Illyriad Heat &amp; Partition Maps</h2>
+        </div>
+        <div id="header_right">
+          <form name="ui_form">
+            <div class="ui_panel">
+              <div id="server_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">server:?<br/>date:?<br/></div>
+            </div>
+            <div class="ui_panel">
+              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Alliance partition is the heaviest computation, and it will eat memory proportional to the maximum number of alliances that have influence over a single spot. To decrease that chance, use a smaller sigma.">Overlay:</label>
+              <select id="overlay_mode">
+                <option value="none" selected="selected">None</option>
+                <option value="pop">Population</option>
+                <option value="pop:E">Elves</option>
+                <option value="pop:H">Humans</option>
+                <option value="pop:D">Dwarves</option>
+                <option value="pop:O">Orcs</option>
+                <option value="par:races">Races (Partition)</option>
+                <option value="par:alliances">Alliances (Partition)</option>
+                <option value="par:confeds">Confederations (Partition)</option>
+              </select><br />
+              <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, and the map is 1:2 vs. in-game squares.">Sigma:</label>
+              <select id="std_dev">
+                <option value="2">2</option>
+                <option value="5">5</option>
+                <option value="10">10</option>
+                <option value="15" selected="selected">15</option>
+                <option value="20">20</option>
+                <option value="30">30</option>
+                <option value="50">50</option>
+              </select>
+            </div>
+            <div class="ui_panel">
+              <input id="show_map" type="checkbox" checked="checked" /> <label for="show_map" class="tooltip" data-tooltip="Show the background map.">Show Map</label><br />
+              <input id="show_towns" type="checkbox" /> <label for="show_towns" class="tooltip" data-tooltip="Show towns as blue dots on the map.">Show Towns</label><br />
+              <input id="show_capitals" type="checkbox" checked="checked" /> <label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow stars. Mouse over them to see more information.">Show Capitals</label>
+            </div>
+            <div class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. This is a static app, and can work locally on a computer (copy all files). To update the dataset: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
+          </form>
+        </div>
+      </header>
+    </div>
 
-    <section id="main_content">
-      <canvas id="map" width="1000" height="1000"></canvas>
-      <div id="jsondiv"></div>
-      <div id="infobox"></div>
-    </section>
+    <div class="outer">
+      <section id="main_content" class="inner">
+        <canvas id="map" width="1000" height="1000"></canvas>
+        <div id="pos_info">[ 0 : 0 ]</div>
+        <div id="jsondiv"></div>
+        <div id="infobox"></div>
+      </section>
+    </div>
 
-    <footer>
-      <p class="copyright">Illymap maintained by <a href="https://github.com/clnx">clnx</a></p>
-      <p>Published with <a href="http://pages.github.com">GitHub Pages</a></p>
-    </footer>
+    <div class="outer">
+      <footer class="inner">
+        <p>&copy; 2012 by The Interwebs</p>
+        <p><a href="https://github.com/clnx/illymap">Project</a> hosted on GitHub</p>
+        <br />
+      </footer>
+    </div>
   </body>
 </html>
