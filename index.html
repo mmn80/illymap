@@ -72,24 +72,24 @@
       varying vec2 vTextureCoord;
 
       // http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
-      const float gamma = 0.8;
+      uniform float uGamma;
 
       vec4 val2rgb(float val, float max_val) {
         vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
         float factor = 0.0, r = 0.0, g = 0.0, b = 0.0;
         float wavelen = 380.0 + 400.0 * val / max_val;
-        if (wavelen >= 380.0 && wavelen < 440.0) { r = -(wavelen - 440.0) / 60.0; b = 1.0; }
+        if (wavelen < 440.0) { r = -(wavelen - 440.0) / 60.0; b = 1.0; }
         else if (wavelen < 490.0) { g = (wavelen - 440.0) / 50.0; b = 1.0; }
         else if (wavelen < 510.0) { g = 1.0; b = -(wavelen - 510.0) / 20.0; }
         else if (wavelen < 580.0) { r = (wavelen - 510.0) / 70.0; g = 1.0; }
         else if (wavelen < 645.0) { r = 1.0; g = -(wavelen - 645.0) / 65.0; }
         else if (wavelen < 780.0) r = 1.0;
-        if (wavelen >= 380.0 && wavelen < 420.0) factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
+        if (wavelen < 420.0) factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
         else if (wavelen < 700.0) factor = 1.0;
         else if (wavelen < 780.0) factor = 0.3 + 0.7 * (780.0 - wavelen) / 80.0;
-        if (r > 0.0) color.r = pow(r * factor, gamma);
-        if (g > 0.0) color.g = pow(g * factor, gamma);
-        if (b > 0.0) color.b = pow(b * factor, gamma);
+        if (r > 0.0) color.r = pow(r * factor, uGamma);
+        if (g > 0.0) color.g = pow(g * factor, uGamma);
+        if (b > 0.0) color.b = pow(b * factor, uGamma);
         return color;
       }
 
@@ -205,7 +205,7 @@
       varying vec2 vTextureCoord;
 
       // http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
-      const float gamma = 0.8;
+      uniform float uGamma = 0.8;
 
       vec4 val2rgb(float val, float max_val) {
         vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
@@ -220,9 +220,9 @@
         if (wavelen >= 380.0 && wavelen < 420.0) factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
         else if (wavelen < 700.0) factor = 1.0;
         else if (wavelen < 780.0) factor = 0.3 + 0.7 * (780.0 - wavelen) / 80.0;
-        if (r > 0.0) color.r = pow(r * factor, gamma);
-        if (g > 0.0) color.g = pow(g * factor, gamma);
-        if (b > 0.0) color.b = pow(b * factor, gamma);
+        if (r > 0.0) color.r = pow(r * factor, uGamma);
+        if (g > 0.0) color.g = pow(g * factor, uGamma);
+        if (b > 0.0) color.b = pow(b * factor, uGamma);
         return color;
       }
 
@@ -332,6 +332,19 @@
                 <option value="20">20</option>
                 <option value="30">30</option>
                 <option value="50">50</option>
+              </select><br />
+              <label id="gamma_label" for="gamma" class="tooltip" data-tooltip="Gamma factor for the false color overlays. Smaller values will create sharper color boundaries.">Gamma:</label>
+              <select id="gamma">
+                <option value="0.1">0.1</option>
+                <option value="0.2">0.2</option>
+                <option value="0.3">0.3</option>
+                <option value="0.4">0.4</option>
+                <option value="0.5">0.5</option>
+                <option value="0.6">0.6</option>
+                <option value="0.7">0.7</option>
+                <option value="0.8" selected="selected">0.8</option>
+                <option value="0.9">0.9</option>
+                <option value="1.0">1.0</option>
               </select>
             </div>
             <div class="ui_panel">

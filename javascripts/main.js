@@ -28,6 +28,7 @@ var map_state = {
 var overlay = {    // object containing overlay data
   rgb: null,       // OUT: overlay rgb Uint8Array; this is the end result of all overlay computations
   std_dev: 15,     // IN: standard deviation
+  gamma: 0.8,
   mode: OVR_NONE,  // IN: overlay mode
   race: -1,        // IN: race filter code (-1 = no filter)
   par_mode: "",    // IN: partition submode
@@ -110,6 +111,7 @@ $(document).ready(function () {
   $("#show_capitals").change(draw);
   $("#overlay_mode").change(recompute_overlay);
   $("#std_dev").change(recompute_overlay);
+  $("#gamma").change(recompute_overlay);
   $("#xml2json_btn").click(loadXml);
   $("#map").mousemove(map_mousemove);
   $("#map").mouseout(map_mouseout);
@@ -219,6 +221,7 @@ function init_shaders() {
   shaders.gauss.uRace = gl.getUniformLocation(shaders.gauss, "uRace");
   shaders.gauss.uPass = gl.getUniformLocation(shaders.gauss, "uPass");
   shaders.gauss.uMaxValue = gl.getUniformLocation(shaders.gauss, "uMaxValue");
+  shaders.gauss.uGamma = gl.getUniformLocation(shaders.gauss, "uGamma");
   return true;
 }
 
@@ -487,6 +490,7 @@ function draw_overlay() {
   gl.uniform1i(shaders.gauss.uRace, overlay.race);
   gl.uniformMatrix4fv(shaders.gauss.uPMatrix, false, pMatrix);
   gl.uniformMatrix4fv(shaders.gauss.uMVMatrix, false, mvMatrix);
+  gl.uniform1f(shaders.gauss.uGamma, overlay.gamma);
   gl.uniform1f(shaders.gauss.uMaxValue, 0.0);
   var kernel = null;
   for (var i=0; i<overlay.kernels.length; i++)
@@ -641,6 +645,7 @@ function map_dblclick(event) {
 function recompute_overlay() {
   overlay.std_dev = parseInt($("#std_dev").val());
   overlay.mode = $("#overlay_mode").val();
+  overlay.gamma = parseFloat($("#gamma").val());
   if (overlay.mode.indexOf(OVR_POP) == 0) {
     overlay.race = get_race_code(overlay.mode.substring(OVR_POP.length + 1));
     overlay.mode = OVR_POP;

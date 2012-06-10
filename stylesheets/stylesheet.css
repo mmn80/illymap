@@ -87,7 +87,7 @@ select {
   margin-bottom: 2px;
 }
 
-#overlay_mode_label, #std_dev_label {
+#overlay_mode_label, #std_dev_label, #gamma_label {
   display: inline-block;
   width: 50px;
 }
