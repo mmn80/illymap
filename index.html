@@ -56,19 +56,22 @@
         }
       }
     </script>
+
     <script id="gauss-fs" type="x-shader/x-fragment">
       precision mediump float;
 
       uniform sampler2D uTownsSampler;
       uniform sampler2D uOvr0Sampler;
+      uniform sampler2D uOvr1Sampler;
       uniform float uKernel[300];
       uniform int uKernelSize;
       uniform int uRace;
       uniform int uPass;
-      uniform float uNormFactor;
+      uniform float uMaxValue;
 
       varying vec2 vTextureCoord;
 
+      // http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
       const float gamma = 0.8;
 
       vec4 val2rgb(float val, float max_val) {
@@ -81,12 +84,142 @@
         else if (wavelen < 580.0) { r = (wavelen - 510.0) / 70.0; g = 1.0; }
         else if (wavelen < 645.0) { r = 1.0; g = -(wavelen - 645.0) / 65.0; }
         else if (wavelen < 780.0) r = 1.0;
-        if (wavelen >= 380.0 && wavelen < 420.0)
-          factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
-        else if (wavelen < 700.0)
-          factor = 1.0;
-        else if (wavelen < 780.0)
-          factor = 0.3 + 0.7 * (780.0 - wavelen) / 80.0;
+        if (wavelen >= 380.0 && wavelen < 420.0) factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
+        else if (wavelen < 700.0) factor = 1.0;
+        else if (wavelen < 780.0) factor = 0.3 + 0.7 * (780.0 - wavelen) / 80.0;
+        if (r > 0.0) color.r = pow(r * factor, gamma);
+        if (g > 0.0) color.g = pow(g * factor, gamma);
+        if (b > 0.0) color.b = pow(b * factor, gamma);
+        return color;
+      }
+
+      float half2float(vec2 c) {
+        float b0 = c.s * 255.0;
+        float b1 = c.t * 255.0;
+        float s = (floor(b0 / 128.0) == 0.0 ? 1.0 : -1.0);
+        if (s == -1.0) b0 -= 128.0;
+        float e = floor(b0 / 4.0);
+        b0 -= e * 4.0;
+        float m = b0 * 256.0 + b1;
+        if (e > 0.0 && e < 31.0)
+          return s * pow(2.0, e - 15.0) * (1.0 + m / 1024.0);
+        else if (e == 0.0 && m == 0.0)
+          return 0.0;
+        else if (e == 0.0 && m != 0.0)
+          return s * 6.1035 * (m / 1024.0) * 0.00001;
+        else if (e == 31.0 && m == 0.0)
+          return s * 65504.0; //INF (65504 is max representable value)
+        return 0.0; //NaN
+      }
+
+      vec2 float2half(float c) {
+        float s = 0.0;
+        if (c < 0.0) {
+          s = 1.0;
+          c *= -1.0;
+        }
+        if (c > 65504.0) return (s == 0.0 ? vec2(124.0 / 255.0, 0.0) : vec2(252.0 / 255.0, 0.0)); //INF
+        if (c == 0.0) return vec2(0.0, 0.0);
+        float m, e, ve;
+        if (c < 0.0000610352) { // subnormal; 0.0000610352 = 2^-14
+          e = 0.0;
+          m = c * 16777216.0;   // 16777216.0 = 2^24
+        }
+        else {                  //normal
+          for (float i=-14.0; i<=15.0; i++) {
+            ve = pow(2.0, i);
+            m = c / ve;
+            if (m < 2.0 && m >= 1.0) {
+              e = i + 15.0;
+              m = (m - 1.0) * 1024.0;
+              break;
+            }
+          }
+        }
+        float m0 = floor(m / 256.0);
+        float m1 = floor(m - m0 * 256.0);
+        return vec2((s * 128.0 + e * 4.0 + m0) / 255.0, m1 / 255.0);
+      }
+
+      float getSampleHoriz(vec2 coord) {
+        if (coord.s < 0.0 || coord.s > 1.0) return 0.0;
+        vec4 sample = texture2D(uTownsSampler, coord);
+        if (uRace == -1 || uRace == int(sample.a * 256.0))
+          return half2float(sample.rg);
+        return 0.0;
+      }
+
+      vec2 apply_kernel(vec2 coord) {
+        float sum = 0.0;
+        for (int i = 0; i < 300; i++) {
+          if (i == uKernelSize) break;
+          float delta = 0.001 * (float(i) - floor(float(uKernelSize) / 2.0));
+          if (uPass == 0) {
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t));
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t));
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t + 0.0005));
+            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t + 0.0005));
+          }
+          else {
+            vec2 pos = vec2(coord.s, coord.t + delta);
+            if (pos.t >= 0.0 && pos.t <= 1.0)
+              sum += uKernel[i] * half2float(texture2D(uOvr0Sampler, pos).rg);
+          }
+        }
+        return float2half(sum);
+      }
+
+      void main(void) {
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        if (uPass == 0 || uPass == 1) {
+          vec2 sum = apply_kernel(vTextureCoord);
+          gl_FragColor = vec4(sum.r, sum.g, 0.0, 1.0);
+        }
+        else if (uPass == 2) {
+          float max_val = 0.0;
+          for (int i = 0; i < 10; i++)
+            for (int j = 0; j < 10; j++) {
+              float val = half2float(texture2D(uOvr1Sampler, vTextureCoord + vec2(float(i) * 0.001, float(j) * 0.001)).rg);
+              if (val > max_val) max_val = val;
+            }
+          vec2 max_val_half = float2half(max_val);
+          gl_FragColor = vec4(max_val_half.r, max_val_half.g, 0.0, 1.0);
+        }
+        else if (uPass == 3) {
+          gl_FragColor = val2rgb(half2float(texture2D(uOvr1Sampler, vTextureCoord).rg), uMaxValue);
+        }
+      }
+    </script>
+
+    <script id="partition-fs" type="x-shader/x-fragment">
+      precision mediump float;
+
+      uniform sampler2D uTownsSampler;
+      uniform sampler2D uOvr0Sampler;
+      uniform float uKernel[300];
+      uniform int uKernelSize;
+      uniform int uRace;
+      uniform int uPass;
+      uniform float uNormFactor;
+
+      varying vec2 vTextureCoord;
+
+      // http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
+      const float gamma = 0.8;
+
+      vec4 val2rgb(float val, float max_val) {
+        vec4 color = vec4(0.0, 0.0, 0.0, 1.0);
+        float factor = 0.0, r = 0.0, g = 0.0, b = 0.0;
+        float wavelen = 380.0 + 400.0 * val / max_val;
+        if (wavelen >= 380.0 && wavelen < 440.0) { r = -(wavelen - 440.0) / 60.0; b = 1.0; }
+        else if (wavelen < 490.0) { g = (wavelen - 440.0) / 50.0; b = 1.0; }
+        else if (wavelen < 510.0) { g = 1.0; b = -(wavelen - 510.0) / 20.0; }
+        else if (wavelen < 580.0) { r = (wavelen - 510.0) / 70.0; g = 1.0; }
+        else if (wavelen < 645.0) { r = 1.0; g = -(wavelen - 645.0) / 65.0; }
+        else if (wavelen < 780.0) r = 1.0;
+        if (wavelen >= 380.0 && wavelen < 420.0) factor = 0.3 + 0.7 * (wavelen - 380.0) / 40.0;
+        else if (wavelen < 700.0) factor = 1.0;
+        else if (wavelen < 780.0) factor = 0.3 + 0.7 * (780.0 - wavelen) / 80.0;
         if (r > 0.0) color.r = pow(r * factor, gamma);
         if (g > 0.0) color.g = pow(g * factor, gamma);
         if (b > 0.0) color.b = pow(b * factor, gamma);
@@ -147,6 +280,7 @@
         }
       }
     </script>
+
     <script id="main_shader-vs" type="x-shader/x-vertex">
       attribute vec3 aVertexPosition;
       attribute vec2 aTextureCoord;
@@ -169,7 +303,7 @@
       <header class="inner">
         <div id="header_left">
           <h1>Illymap</h1>
-          <h2>Illyriad Heat &amp; Partition Maps</h2>
+          <h2><a href="http://www.illyriad.co.uk/" target="_blank">Illyriad</a> Heat &amp; Partition Maps</h2>
         </div>
         <div id="header_right">
           <form name="ui_form">
@@ -205,7 +339,7 @@
               <input id="show_towns" type="checkbox" /> <label for="show_towns" class="tooltip" data-tooltip="Show towns as blue dots on the map.">Show Towns</label><br />
               <input id="show_capitals" type="checkbox" checked="checked" /> <label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow stars. Mouse over them to see more information.">Show Capitals</label>
             </div>
-            <div class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. This is a static app, and can work locally on a computer (copy all files). To update the dataset: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
+            <div class="ui_panel" style="display: none"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. This is a static app, and can work locally on a computer (copy all files). To update the dataset: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
           </form>
         </div>
       </header>
@@ -223,7 +357,7 @@
     <div class="outer">
       <footer class="inner">
         <p>&copy; 2012 by The Interwebs</p>
-        <p><a href="https://github.com/clnx/illymap">Project</a> hosted on GitHub</p>
+        <p><a href="https://github.com/clnx/illymap" target="_blank">Project</a> hosted on GitHub</p>
         <br />
       </footer>
     </div>

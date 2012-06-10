@@ -64,7 +64,7 @@ h2 {
 #header_right {
   float: right;
   display: inline-block;
-  width: 600px;
+  width: 500px;
   margin: 20px 0 0 0;
   border: 1px solid #CCCCCC;
   border-bottom: none;
@@ -184,6 +184,7 @@ a:hover {
 #infobox, .tooltip::after {
   position: absolute;
   padding: 3px 7px;
+  min-width: 100px;
   border-radius: 8px 8px 8px 0px;
   color: #FFF;
   background: rgba(199, 159, 0, 0.8);

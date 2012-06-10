@@ -19,7 +19,9 @@ Data Files
 Illymap uses the following data files provided by Illyriad (though the players file is not yet used):
 
 <http://elgea.illyriad.co.uk/data_downloads/datafile_alliances.xml>
+
 <http://elgea.illyriad.co.uk/data_downloads/datafile_players.xml>
+
 <http://elgea.illyriad.co.uk/data_downloads/datafile_towns.xml>
 
 The server-side is static and datafiles should be manually pulled by hosters from the source and pasted into the data folder.
