@@ -9,8 +9,8 @@ var ILLY_MAP_URL = "http://elgea.illyriad.co.uk/#/World/Map/{x}/{y}/10";
 
 var MAP_WIDTH = 1000;
 var OVR_NONE = "none", OVR_POP = "pop", OVR_PAR = "par";        // overlay modes: none, population density in false colors, or map partition
-var OVR_PAR_RACES = "races", OVER_PAR_ALLIANCES = "alliances",
-  OVER_PAR_CONFEDS = "confeds";                                 // submodes for partition mode
+var OVR_PAR_RACES = "races", OVR_PAR_ALLIANCES = "alliances",
+  OVR_PAR_CONFEDS = "confeds";                                 // submodes for partition mode
 var PAR_COLORS = [ [0xFF,0,0]/*red*/, [0,0xFF,0]/*lime*/, [0,0,0xFF]/*blue*/, [0xFF,0xFF,0]/*yellow*/, [0,0xFF,0xFF]/*cyan*/,
   [0xFF,0,0xFF]/*fuchsia*/, [0xFF,0xA5,0]/*orange*/, [0,0x80,0]/*green*/, [0x80,0x80,0]/*olive*/, [0,0,0xA0]/*darkblue*/,
   [0xA5,0x2A,0x2A]/*brown*/, [0x80,0,0x80]/*purple*/, [0xAD,0xD8,0xE6]/*lightblue*/, [0x80,0,0]/*maroon*/, [0xC0,0xC0,0xC0]/*silver*/ ];
@@ -48,11 +48,18 @@ var overlay = {    // object containing overlay data
 }
 
 var gl;
-var shaders = { main: null, gauss: null }
+var shaders = {
+  main: null,
+  gauss: null,
+  part: null
+}
 var mvMatrix = mat4.create(), pMatrix = mat4.create();
 var buffers = {
   mapPos: null,
-  mapTexPos: null,
+  maxPos: null,
+  partIdxPos: null,
+  partTempPos: null,
+  texPos: null,
   starsPos: null,
   starsTexPos: null,
   selStarPos: null,
@@ -65,12 +72,16 @@ var textures = {
   overlay_max: null,
   overlay_temp1: null,
   overlay_out: null,
+  part_idx: null,
+  part_temp: null
 }
 var fbs = {
-  overlay_max: null,
-  overlay_temp1: null,
-  overlay_temp2: null,
-  overlay_out: null,
+  overlay_max: null,   // 100x100
+  overlay_temp1: null, // 1000x1000
+  overlay_temp2: null, // 1000x1000
+  overlay_out: null,   // 1000x1000
+  part_idx: null,      // 3000x3000 - 4 idx per fragmanet; 6x6=36 buffers/tiles
+  part_temp: null      // 6000x3000 - 2 gauss sums per fragment
 }
 
 
@@ -128,12 +139,21 @@ $(document).ready(function () {
 function init_data() {
   $("#server_info").html("server: " + data.server + "<br/>date: " + data.date.substring(0, 10));
   capitals = [];
+  if (data.alliances.length > 254)
+    alert("Warning!\nThere are more then 254 alliances. Alliance partition computations will only consider the first 254 (less GPU memory needed). Other overlays are not affected.");
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
     town.x1 = Math.round((town.x + MAP_WIDTH) / 2);
     town.y1 = Math.round((town.y + MAP_WIDTH) / 2);
     if (town.r === undefined)
       town.r = "H";
+    town.alliance_index = 0;
+    if (town.a > 0)
+      for (var j=0; j<data.alliances.length; j++)
+        if (data.alliances[j].id == town.a) {
+          if (j < 255) town.alliance_index = j + 1;  // 1-based index; 0 = no alliance
+          break;
+        }
     if (town.c == 1) {
       town.alliance = "?";
       for (var j=0; j<data.alliances.length; j++) {
@@ -222,6 +242,17 @@ function init_shaders() {
   shaders.gauss.uPass = gl.getUniformLocation(shaders.gauss, "uPass");
   shaders.gauss.uMaxValue = gl.getUniformLocation(shaders.gauss, "uMaxValue");
   shaders.gauss.uGamma = gl.getUniformLocation(shaders.gauss, "uGamma");
+  shaders.part = create_program("partition-fs", "main_shader-vs");
+  if (!shaders.part) return false;
+  shaders.part.uTownsSampler = gl.getUniformLocation(shaders.part, "uTownsSampler");
+  shaders.part.uIdxSampler = gl.getUniformLocation(shaders.part, "uIdxSampler");
+  shaders.part.uTempSampler = gl.getUniformLocation(shaders.part, "uTempSampler");
+  shaders.part.uKernel = [];
+  for (var i=0; i<KERNEL_UNIFORM_SIZE; i++)
+    shaders.part.uKernel.push(gl.getUniformLocation(shaders.part, "uKernel[" + i + "]"));
+  shaders.part.uKernelSize = gl.getUniformLocation(shaders.part, "uKernelSize");
+  shaders.part.uPass = gl.getUniformLocation(shaders.part, "uPass");
+  shaders.part.uPartMode = gl.getUniformLocation(shaders.part, "uPartMode");
   return true;
 }
 
@@ -245,66 +276,77 @@ function create_program(vs_script_id, fs_script_id) {
   return program;
 }
 
-function init_overlay_fb_tex() {
-  var attach_tex = function(size) {
-    var tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    return tex;
-  };
+function attach_tex_to_fb(width, height) {
+  var tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  return tex;
+}
 
+function init_overlay_fb_tex() {
   fbs.overlay_max = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_max);
-  textures.overlay_max = attach_tex(MAP_WIDTH / 10);
+  textures.overlay_max = attach_tex_to_fb(MAP_WIDTH / 10, MAP_WIDTH / 10);
 
   fbs.overlay_temp1 = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp1);
-  textures.overlay_temp1 = attach_tex(MAP_WIDTH);
+  textures.overlay_temp1 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
 
   fbs.overlay_temp2 = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp2);
-  textures.overlay_temp2 = attach_tex(MAP_WIDTH);
+  textures.overlay_temp2 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
 
   fbs.overlay_out = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_out);
-  textures.overlay_out = attach_tex(MAP_WIDTH);
+  textures.overlay_out = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
+function init_part_fb_tex() {
+  if (fbs.part_idx) return;
+
+  fbs.part_idx = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.part_idx);
+  textures.part_idx = attach_tex_to_fb(MAP_WIDTH * 3, MAP_WIDTH * 3);  // 4 ids per fragment
+
+  fbs.part_temp = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.part_temp);
+  textures.part_temp = attach_tex_to_fb(MAP_WIDTH * 6, MAP_WIDTH * 3); // 2 halfs per fragment
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.bindTexture(gl.TEXTURE_2D, null);
 }
 
 function init_static_buffers() {
-  buffers.mapPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
-  var vertices = [
-       0.0, 0.0,  0.0,
-       MAP_WIDTH,  0.0,  0.0,
-       0.0,  MAP_WIDTH,  0.0,
-       MAP_WIDTH,  MAP_WIDTH,  0.0
-  ];
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
-  buffers.mapPos.itemSize = 3;
-  buffers.mapPos.numItems = 4;
+  var create_quad = function(width, height) {
+    var buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    var vertices = [
+         0.0,   0.0,    0.0,
+         width, 0.0,    0.0,
+         0.0,   height, 0.0,
+         width, height, 0.0
+    ];
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+    buffer.itemSize = 3;
+    buffer.numItems = 4;
+    return buffer;
+  };
 
-  buffers.maxPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.maxPos);
-  vertices = [
-       0.0, 0.0,  0.0,
-       MAP_WIDTH / 10,  0.0,  0.0,
-       0.0,  MAP_WIDTH / 10,  0.0,
-       MAP_WIDTH / 10,  MAP_WIDTH / 10,  0.0
-  ];
-  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
-  buffers.maxPos.itemSize = 3;
-  buffers.maxPos.numItems = 4;
+  buffers.mapPos = create_quad(MAP_WIDTH, MAP_WIDTH);
+  buffers.maxPos = create_quad(MAP_WIDTH / 10, MAP_WIDTH / 10);
+  buffers.partIdxPos = create_quad(MAP_WIDTH * 3, MAP_WIDTH * 3);
+  buffers.partTempPos = create_quad(MAP_WIDTH * 6, MAP_WIDTH * 3);
 
-  buffers.mapTexPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
+  buffers.texPos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
   var textureCoords = [
       0.0, 0.0,
       1.0, 0.0,
@@ -312,8 +354,8 @@ function init_static_buffers() {
       1.0, 1.0
   ];
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
-  buffers.mapTexPos.itemSize = 2;
-  buffers.mapTexPos.numItems = 4;
+  buffers.texPos.itemSize = 2;
+  buffers.texPos.numItems = 4;
 }
 
 function get_town_pos(town, is_selected) {
@@ -382,19 +424,13 @@ function init_data_buffers() {
 
 function init_towns_tex() {
   var buffer = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH * 16));
-  /*var max_pop = 0;
-  for (var i=0; i<data.towns.length; i++)
-    if (data.towns[i].p > max_pop)
-      max_pop = data.towns[i].p;
-  var factor = 65536 / max_pop;*/
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
     var idx = (town.x + MAP_WIDTH + ((town.y + MAP_WIDTH) * MAP_WIDTH * 2)) * 4;
-    //var p = Math.floor(town.p * factor);
     var half = float2half(town.p);
-    buffer[idx] = half[0];//Math.floor(p / 256);
-    buffer[idx + 1] = half[1];//p % 256;
-    buffer[idx + 2] = 0; // alliance index
+    buffer[idx] = half[0];
+    buffer[idx + 1] = half[1];
+    buffer[idx + 2] = town.alliance_index;
     buffer[idx + 3] = get_race_code(town.r);
   }
   textures.towns = gl.createTexture();
@@ -468,13 +504,44 @@ function draw() {
   }
 }
 
-function draw_overlay() {
-  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
-  mat4.identity(mvMatrix);
-  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
+function upload_kernel(shader) {
+  var kernel = null;
+  for (var i=0; i<overlay.kernels.length; i++)
+    if (overlay.kernels[i].std_dev == overlay.std_dev) {
+      kernel = overlay.kernels[i].buffer;
+      break;
+    }
+  gl.uniform1i(shader.uKernelSize, kernel.length);
+  for (var i=0; i<kernel.length && i<KERNEL_UNIFORM_SIZE; i++)
+    gl.uniform1f(shader.uKernel[i], kernel[i]);
+}
 
-  // global initialization
+function overlay_pass(shader, pass, fb, vtx_buffer, width, height, get_max_pass) {
+  gl.uniform1i(shader.uPass, pass);
+  if (get_max_pass) gl.uniform1f(shader.uMaxValue, 1.0);
+  mat4.ortho(0, width, 0, height, 0, 10, pMatrix);
+  gl.uniformMatrix4fv(shader.uPMatrix, false, pMatrix);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
+  gl.vertexAttribPointer(shader.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
+  gl.vertexAttribPointer(shader.aTextureCoord, buffers.texPos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, vtx_buffer.numItems);
+  if (get_max_pass) {
+    var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
+    gl.readPixels(0, 0, MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    var max_val = 0;
+    for (var i=0; i<pixels.length; i+=4) {
+      var val = half2float(pixels[i], pixels[i + 1]);
+      if (val > max_val)
+        max_val = val;
+    }
+    gl.uniform1f(shader.uMaxValue, max_val);
+  }
+}
 
+function draw_heat() {
   gl.useProgram(shaders.gauss);
 
   gl.activeTexture(gl.TEXTURE2);
@@ -487,59 +554,54 @@ function draw_overlay() {
   gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp2);
   gl.uniform1i(shaders.gauss.uOvr1Sampler, 5);
 
-  gl.uniform1i(shaders.gauss.uRace, overlay.race);
-  gl.uniformMatrix4fv(shaders.gauss.uPMatrix, false, pMatrix);
+  mat4.identity(mvMatrix);
+  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
   gl.uniformMatrix4fv(shaders.gauss.uMVMatrix, false, mvMatrix);
+
+  gl.uniform1i(shaders.gauss.uRace, overlay.race);
   gl.uniform1f(shaders.gauss.uGamma, overlay.gamma);
   gl.uniform1f(shaders.gauss.uMaxValue, 0.0);
-  var kernel = null;
-  for (var i=0; i<overlay.kernels.length; i++)
-    if (overlay.kernels[i].std_dev == overlay.std_dev) {
-      kernel = overlay.kernels[i].buffer;
-      break;
-    }
-  gl.uniform1i(shaders.gauss.uKernelSize, kernel.length);
-  for (var i=0; i<kernel.length && i<KERNEL_UNIFORM_SIZE; i++)
-    gl.uniform1f(shaders.gauss.uKernel[i], kernel[i]);
+  upload_kernel(shaders.gauss);
 
-  // passes
+  overlay_pass(shaders.gauss, 0, fbs.overlay_temp1, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
+  overlay_pass(shaders.gauss, 1, fbs.overlay_temp2, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
+  overlay_pass(shaders.gauss, 2, fbs.overlay_max, buffers.maxPos, MAP_WIDTH, MAP_WIDTH, true);
+  overlay_pass(shaders.gauss, 3, fbs.overlay_out, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
 
-  var overlay_pass = function(pass, fb, get_max_pass) {
-    var vtx_buffer = (get_max_pass ? buffers.maxPos : buffers.mapPos);
-    gl.uniform1i(shaders.gauss.uPass, pass);
-    if (get_max_pass) gl.uniform1f(shaders.gauss.uMaxValue, 1.0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
-    gl.vertexAttribPointer(shaders.gauss.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
-    gl.vertexAttribPointer(shaders.gauss.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, vtx_buffer.numItems);
-    if (get_max_pass) {
-      var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
-      gl.readPixels(0, 0, MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      var max_val = 0;
-      for (var i=0; i<pixels.length; i+=4) {
-        var val = half2float(pixels[i], pixels[i + 1]);
-        if (val > max_val)
-          max_val = val;
-      }
-      gl.uniform1f(shaders.gauss.uMaxValue, max_val);
-    }
-  };
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  draw();
+}
 
-  overlay_pass(0, fbs.overlay_temp1, false);
-  overlay_pass(1, fbs.overlay_temp2, false);
-  overlay_pass(2, fbs.overlay_max, true);
-  overlay_pass(3, fbs.overlay_out, false);
+function draw_partition() {
+  gl.useProgram(shaders.part);
+
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  gl.uniform1i(shaders.part.uTownsSampler, 2);
+  gl.activeTexture(gl.TEXTURE6);
+  gl.bindTexture(gl.TEXTURE_2D, textures.part_idx);
+  gl.uniform1i(shaders.part.uIdxSampler, 6);
+  gl.activeTexture(gl.TEXTURE7);
+  gl.bindTexture(gl.TEXTURE_2D, textures.part_temp);
+  gl.uniform1i(shaders.part.uTempSampler, 7);
+
+  mat4.identity(mvMatrix);
+  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
+  gl.uniformMatrix4fv(shaders.part.uMVMatrix, false, mvMatrix);
+  upload_kernel(shaders.part);
+  gl.uniform1i(shaders.part.uPartMode, get_par_mode_code());
+
+  overlay_pass(shaders.part, 0, fbs.part_idx, buffers.partIdxPos, MAP_WIDTH * 3, MAP_WIDTH * 3, false);
+  overlay_pass(shaders.part, 1, fbs.part_temp, buffers.partTempPos, MAP_WIDTH * 6, MAP_WIDTH * 3, false);
+  overlay_pass(shaders.part, 2, fbs.overlay_out, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   draw();
 }
 
 function draw_map(v_map, grayed) {
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapTexPos);
-  gl.vertexAttribPointer(shaders.main.aTextureCoord, buffers.mapTexPos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
+  gl.vertexAttribPointer(shaders.main.aTextureCoord, buffers.texPos.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
   gl.vertexAttribPointer(shaders.main.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
@@ -588,9 +650,9 @@ function map_mousemove(event) {
   var off = $("#map").offset();
   map_state.mx = event.pageX - off.left;
   map_state.my = MAP_WIDTH - event.pageY + off.top;
-  map_state.illy_x = map_state.mx * 2 - MAP_WIDTH
-  map_state.illy_y = map_state.my * 2 - MAP_WIDTH
-  var illyx = map_state.illy_x.toString(), illyy = map_state.illy_y.toString()
+  map_state.illy_x = map_state.mx * 2 - MAP_WIDTH;
+  map_state.illy_y = map_state.my * 2 - MAP_WIDTH;
+  var illyx = map_state.illy_x.toString(), illyy = map_state.illy_y.toString();
   while (illyx.length < 4) illyx = " " + illyx;
   while (illyy.length < 4) illyy = " " + illyy;
   illyx = illyx.replace(/ /g, "&nbsp;");
@@ -636,12 +698,6 @@ function map_dblclick(event) {
   window.open(ILLY_MAP_URL.replace("{x}", x).replace("{y}", y), '_blank');
 }
 
-
-
-
-// compute
-
-
 function recompute_overlay() {
   overlay.std_dev = parseInt($("#std_dev").val());
   overlay.mode = $("#overlay_mode").val();
@@ -653,200 +709,15 @@ function recompute_overlay() {
   else if (overlay.mode.indexOf(OVR_PAR) == 0) {
     overlay.par_mode = overlay.mode.substring(OVR_PAR.length + 1);
     overlay.mode = OVR_PAR;
+    init_part_fb_tex();
   }
-  if (overlay.mode != OVR_NONE) draw_overlay();
+  if (overlay.mode == OVR_POP) draw_heat();
+  else if (overlay.mode == OVR_PAR) draw_partition();
   else draw();
 }
 
-function compute_partitions(kernel) {
-  overlay.partitions = [];
-  overlay.buffers = [];
-  var offset = Math.floor(kernel.buffer.length / 2);
-  var x, y, i, j, buffer, pos, town, part_val, x1, x2, dx, val;
-  // progress stuff
-  //var progress = 0, p1_full = 50, p1_step = Math.floor(data.towns.length / p1_full);
-  //var p2_full = 50, p2_step = Math.floor(MAP_WIDTH / p1_full);
-  //show_progress(0);
-  // first pass (progress = 0)
-  for (var i=0; i<data.towns.length; i++) {
-    town = data.towns[i];
-    part_val = (overlay.par_mode == OVR_PAR_RACES ? town.r : town.a);
-    x1 = town.x1 - offset;
-    x2 = x1 + kernel.buffer.length;
-    dx = 0;
-    if (x1 < 0) { dx = -x1; x1 = 0; }
-    if (x2 >= MAP_WIDTH) x2 = MAP_WIDTH - 1;
-    for (x=x1; x<x2; x++)
-      add_density_value(kernel, part_val, town.y1 * MAP_WIDTH + x, x - x1 + dx, town.p, false);
-    // progress stuff
-    /*if (i && i % p1_step == 0) {
-      progress = Math.floor((i / data.towns.length) * p1_full);
-      show_progress(progress);
-    }*/
-  }
-  // second pass (progress = 50)
-  var b_len = overlay.buffers.length;
-  var y1, y2, dy;
-  for (y=0; y<MAP_WIDTH; y++) {
-    for (x=0; x<MAP_WIDTH; x++) {
-      pos = y * MAP_WIDTH + x;
-      for (j=0; j<b_len; j++) {
-        buffer = overlay.buffers[j];
-        // ignore already generated output cells
-        if (buffer.is_output[Math.floor(pos / 8)] & (1 << (pos % 8))) break;
-        val = buffer.density[pos];
-        if (!val) continue;
-        part_val = overlay.partitions[buffer.partition[pos] - 1].value;
-        y1 = y - offset;
-        y2 = y1 + kernel.buffer.length;
-        dy = 0;
-        if (y1 < 0) { dy = - y1; y1 = 0; }
-        if (y2 >= MAP_WIDTH) y2 = MAP_WIDTH - 1;
-        for (i=y1; i<y2; i++)
-          add_density_value(kernel, part_val, i * MAP_WIDTH + x, i - y1 + dy, val, true);
-      }
-    }
-    /*if (y && y % p2_step == 0) {
-      progress = p1_full + Math.floor((y / data.towns.length) * p2_full);
-      show_progress(progress);
-    }*/
-  }
-  // compute dominators
-  var max_part_id, max_density, part_obj, found_one, is_one;
-  overlay.dominators = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH));
-  for (y=0; y<MAP_WIDTH; y++)
-    for (x=0; x<MAP_WIDTH; x++) {
-      pos = y * MAP_WIDTH + x;
-      max_part_id = 0; max_density = 0.1; found_one = false;
-      for (i=0; i<overlay.buffers.length; i++) {
-        buffer = overlay.buffers[i];
-        is_one = (buffer.is_output[Math.floor(pos / 8)] & (1 << (pos % 8)) != 0);
-        if (found_one && !is_one) break;
-        if (is_one && buffer.density[pos] > max_density) {
-          found_one = true;
-          max_density = buffer.density[pos];
-          max_part_id = buffer.partition[pos];
-        }
-      }
-      if (!max_part_id) continue;
-      overlay.dominators[pos] = max_part_id;
-      // increment stats
-      part_obj = overlay.partitions[max_part_id - 1];
-      part_obj.area += 1;
-      part_obj.pop += max_density;
-    }
-  // sort partitions
-  overlay.partitions.sort(function(a, b) {
-    return b.area - a.area;
-  });
-  overlay.buffers = []; // partition_ids broken due to sort; no longer needed anyway
-  // rgb generation (progress = 100)
-  var col;
-  overlay.rgb = new Uint8Array(new ArrayBuffer(3 * MAP_WIDTH * MAP_WIDTH));
-  for (i=0; i<overlay.dominators.length; i++) {
-    max_part_id = overlay.dominators[i];
-    if (max_part_id && max_part_id <= PAR_COLORS.length)
-      col = PAR_COLORS[max_part_id - 1];
-    else col = [0,0,0];
-    overlay.rgb[i * 3] = col[0];
-    overlay.rgb[i * 3 + 1] = col[1];
-    overlay.rgb[i * 3 + 2] = col[2];
-  }
-}
-
-function add_density_value(kernel, part_val, pos, kernel_pos, pop_val, is_output) {
-  var part_id = 0, temp_id, i;
-  var idx = Math.floor(pos / 8);
-  var mask = 1 << (pos % 8);
-  // find partition in partition table
-  for (i=0;i<overlay.partitions.length;i++)
-    if (overlay.partitions[i].value == part_val) {
-      part_id = i + 1;
-      break;
-    }
-  if (!part_id) {
-    overlay.partitions.push({ value: part_val, name: part_val, pop: 0, area: 0 });
-    part_id = overlay.partitions.length;
-  }
-  // find buffer
-  var buffer = null;
-  for (i=0;i<overlay.buffers.length;i++) {
-    buffer = overlay.buffers[i];
-    temp_id = buffer.partition[pos];
-    if (!temp_id || (temp_id == part_id && (!is_output || buffer.is_output[idx] & mask))) {
-      if (!temp_id) buffer.partition[pos] = part_id;
-      break;
-    }
-    else buffer = null;
-  }
-  if (!buffer) buffer = add_overlay_buffer();
-  // add to density
-  buffer.density[pos] += pop_val * kernel.buffer[kernel_pos];
-  if (is_output)
-    buffer.is_output[idx] = buffer.is_output[idx] | mask;
-}
-
-function add_overlay_buffer() {
-  var buffer = { partition: null, is_output: null, density: null }
-  buffer.partition = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH));
-  buffer.is_output = new Uint8Array(new ArrayBuffer(Math.ceil(MAP_WIDTH * MAP_WIDTH / 8)));
-  buffer.density = new Float32Array(new ArrayBuffer(4 * MAP_WIDTH * MAP_WIDTH));
-  overlay.buffers.push(buffer);
-  return buffer;
-}
-
-// applies a 1D gaussian kernel on both dimensions succesively
-
-function compute_density(kernel) {
-  overlay.density = new Float32Array(new ArrayBuffer(4 * MAP_WIDTH * MAP_WIDTH));
-  var buffer = new Float32Array(new ArrayBuffer(4 * MAP_WIDTH * MAP_WIDTH));
-  var offset = Math.floor(kernel.buffer.length / 2);
-  for (var i=0; i<data.towns.length; i++) {
-    var town = data.towns[i];
-    if (overlay.race == "" || overlay.race == town.r) {
-      var x1 = town.x1 - offset, x2 = x1 + kernel.buffer.length, dx = 0;
-      if (x1 < 0) { dx = -x1; x1 = 0; }
-      if (x2 >= MAP_WIDTH) x2 = MAP_WIDTH - 1;
-      for (var x=x1; x<x2; x++)
-        buffer[town.y1 * MAP_WIDTH + x] += town.p * kernel.buffer[x - x1 + dx];
-    }
-  }
-  for (var y=0; y<MAP_WIDTH; y++)
-    for (var x=0; x<MAP_WIDTH; x++) {
-      var val = buffer[y * MAP_WIDTH + x];
-      if (val) {
-        var y1 = y - offset, y2 = y1 + kernel.buffer.length, dy = 0;
-        if (y1 < 0) { dy = - y1; y1 = 0; }
-        if (y2 >= MAP_WIDTH) y2 = MAP_WIDTH - 1;
-        for (var i=y1;i<y2;i++)
-          overlay.density[i * MAP_WIDTH + x] += val * kernel.buffer[i - y1 + dy];
-      }
-    }
-
-    // compute max density (for normalization)
-
-    overlay.max_density = 0;
-    for (var i=0; i<overlay.density.length; i++)
-      if (overlay.density[i] > overlay.max_density)
-        overlay.max_density = overlay.density[i];
-
-    // compute rgb buffer
-
-    overlay.rgb = new Uint8Array(new ArrayBuffer(3 * MAP_WIDTH * MAP_WIDTH));
-    for (var i=0; i<overlay.density.length; i++)
-      val2rgb(overlay.density[i], overlay.max_density, i * 3);
-}
-
-
-
-
-
-
-
-
-
 // converts xml files from Illyriad (~17MB) to a more compact json (~1.3MB)
-// xml files should be mannually downloaded from Illyriad and put into the data folder
+// xml files should be manually downloaded from Illyriad and put into the data folder
 // result is shown on the screen, to be manually copied into data/data.json
 // this is to avoid the need for a dynamic back-end
 
@@ -929,44 +800,6 @@ function loadXml() {
 
 // utils *******************************************************************
 
-// converts scalar to light wavelength and then to to rgb; draws it on the rgb buffer
-// algorithm snached from http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm
-
-var gamma = 0.8;
-
-function val2rgb(val, max_val, idx) {
-  var factor = 0, r = 0, g = 0, b = 0;
-  var wavelen = 380 + 400 * val / max_val;
-  if (wavelen >= 380 && wavelen < 440) { r = -(wavelen - 440) / 60; b = 1; }
-  else if (wavelen < 490) { g = (wavelen - 440) / 50; b = 1; }
-  else if (wavelen < 510) { g = 1; b = -(wavelen - 510) / 20; }
-  else if (wavelen < 580) { r = (wavelen - 510) / 70; g = 1; }
-  else if (wavelen < 645) { r = 1; g = -(wavelen - 645) / 65; }
-  else if (wavelen < 780) r = 1;
-  if (wavelen >= 380 && wavelen < 420)
-    factor = 0.3 + 0.7 * (wavelen - 380) / 40;
-  else if (wavelen < 700)
-    factor = 1;
-  else if (wavelen < 780)
-    factor = 0.3 + 0.7 * (780 - wavelen) / 80;
-  if (r) overlay.rgb[idx] = Math.round(255 * Math.pow(r * factor, gamma));
-  if (g) overlay.rgb[idx + 1] = Math.round(255 * Math.pow(g * factor, gamma));
-  if (b) overlay.rgb[idx + 2] = Math.round(255 * Math.pow(b * factor, gamma));
-}
-
-function show_progress(percent) {
-  var ctx = $("#map")[0].getContext("2d");
-  var w = 150, h = 50;
-  var x = Math.floor((MAP_WIDTH - w) / 2), y = Math.floor((MAP_WIDTH - h) / 2);
-  ctx.beginPath();
-  ctx.rect(x, y, w, h);
-  ctx.fillStyle = "blue";
-  ctx.fill();
-  ctx.fillStyle = "white";
-  ctx.font = "40px Calibri";
-  ctx.fillText(percent + "%", x + 40, y + 38);
-}
-
 function get_shader(gl, id) {
   var shaderScript = $("#" + id)[0];
   if (!shaderScript) return null;
@@ -999,6 +832,12 @@ function get_race_code(race_str) {
   else if (race_str == "D") r = 2;
   else if (race_str == "O") r = 3;
   return r;
+}
+
+function get_par_mode_code() {
+  if (overlay.par_mode == OVR_PAR_RACES) return 0;
+  else if (overlay.par_mode == OVR_PAR_ALLIANCES) return 1;
+  else if (overlay.par_mode == OVR_PAR_CONFEDS) return 2;
 }
 
 function half2float(b0, b1) {
