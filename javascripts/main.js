@@ -8,9 +8,8 @@ var STAR_IMAGE = "images/star.gif";
 var ILLY_MAP_URL = "http://elgea.illyriad.co.uk/#/World/Map/{x}/{y}/10";
 
 var MAP_WIDTH = 1000;
-var OVR_NONE = "none", OVR_POP = "pop", OVR_PAR = "par";        // overlay modes: none, population density in false colors, or map partition
-var OVR_PAR_RACES = "races", OVR_PAR_ALLIANCES = "alliances",
-  OVR_PAR_CONFEDS = "confeds";                                 // submodes for partition mode
+var OVR_NONE = "none", OVR_POP = "pop", OVR_PAR = "par";
+var OVR_PAR_RACES = "races", OVR_PAR_ALLIANCES = "alliances";
 var PAR_COLORS = [
   [0x00, 0xFF, 0x00],/*lime*/      [0x00, 0x00, 0xFF],/*blue*/   [0xFF, 0x00, 0xFF],/*fuchsia*/
   [0xFF, 0x00, 0x00],/*red*/       [0x00, 0xFF, 0xFF],/*cyan*/   [0xFF, 0xFF, 0x00],/*yellow*/
@@ -22,7 +21,6 @@ var KERNEL_UNIFORM_SIZE = 300;
 var data = { server: "", date: "", alliances: [], towns: [] }; // data loaded from the json file, generated based on the Illy-supplied xmls
 
 var capitals = [];
-var confeds = [];
 
 var map_state = {
   mx: 0,           // mousex
@@ -62,8 +60,7 @@ var buffers = {
 var textures = {
   bg_map: null,
   star: null,
-  towns1: null,
-  towns2: null,
+  towns: null,
   overlay_max: null,
   overlay_temp1: null,
   overlay_temp2: null,
@@ -131,7 +128,7 @@ $(document).ready(function () {
 });
 
 function init_data() {
-  $("#server_info").html("server: " + data.server + "<br/>date: " + data.date.substring(0, 10));
+  $("#server_info").html("server: " + data.server + "<br/>date: " + data.date);
   capitals = [];
   if (data.alliances.length > 254)
     alert("Warning!\nThere are more then 254 alliances. Alliance partition computations will only consider the first 254 (less GPU memory needed). Other overlays are not affected.");
@@ -152,44 +149,22 @@ function init_data() {
   for (var i=0; i<data.alliances.length; i++) {
     var a = data.alliances[i];
     a.index = i + 1;
-    for (var j=0; j<confeds.length; j++) {
-      var conf = confeds[j];
-      if (confed_has_alliance(conf, a)) {
-        a.confederation = conf;
-        break;
-      }
-    }
-    if (!a.confederation) {
-      a.confederation = { name: "", alliances: [ a ] };
-      confeds.push(a.confederation);
-    }
-    for (var j=0; j<a.conf.length; j++) {
-      var a1 = alliance_by_id(a.conf[j]);
-      if (a1 && !confed_has_alliance(a.confederation, a1))
-        a.confederation.alliances.push(a1);
-    }
+    for (var j=0; j<a.conf.length; j++)
+      a.conf[j] = alliance_by_id(a.conf[j]);
+    for (var j=0; j<a.NAP.length; j++)
+      a.NAP[j] = alliance_by_id(a.NAP[j]);
+    for (var j=0; j<a.war.length; j++)
+      a.war[j] = alliance_by_id(a.war[j]);
   }
-  for (var i=0; i<confeds.length; i++) {
-    var conf = confeds[i];
-    conf.alliances.sort(function(a, b) { return b.p - a.p; });
-    conf.p = 0;
-    for (var j=0; j<conf.alliances.length; j++) {
-      var a = conf.alliances[j];
-      conf.name += (j ? ", " : "") + a.tck;
-      conf.p += a.p;
-    }
-  }
-  confeds.sort(function(a, b) { return b.p - a.p; });
-  for (var i=0; i<confeds.length; i++)
-    confeds[i].index = i + 1;
   capitals.sort(function(a, b) { return a.p - b.p; });
   init_kernels();
   init_data_buffers();
-  init_towns_tex(false);
-  init_towns_tex(true);
   if ($("#overlay_mode").val() != OVR_NONE)
     recompute_overlay();
-  else draw();
+  else {
+    init_towns_tex(0);
+    draw();
+  }
 }
 
 function init_kernels() {
@@ -419,7 +394,8 @@ function init_data_buffers() {
   buffers.selStarTexPos.numItems = 6;
 }
 
-function init_towns_tex(confeds_mode) {
+function init_towns_tex(mode) {
+  if (textures.towns && textures.towns.mode == mode) return;
   var buffer = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH * 16));
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
@@ -427,18 +403,12 @@ function init_towns_tex(confeds_mode) {
     var half = float2half(town.p);
     buffer[idx] = half[0];
     buffer[idx + 1] = half[1];
-    buffer[idx + 2] = (town.alliance ? (confeds_mode ? town.alliance.confederation.index : town.alliance.index) : 0);
+    buffer[idx + 2] = (town.alliance ? town.alliance.index : 0);
     buffer[idx + 3] = get_race_code(town.r);
   }
-  var tex;
-  if (confeds_mode) {
-    textures.towns2 = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, textures.towns2);
-  }
-  else {
-    textures.towns1 = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, textures.towns1);
-  }
+  if (!textures.towns) textures.towns = gl.createTexture();
+  textures.towns.mode = mode;
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2 * MAP_WIDTH, 2 * MAP_WIDTH, 0, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -475,7 +445,7 @@ function draw() {
   // draw background map and/or overlay
 
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns1);
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
   gl.uniform1i(shaders.main.uTownsSampler, 2);
 
   gl.uniform1i(shaders.main.uShowBg, v_map);
@@ -513,7 +483,7 @@ function draw_overlay_init() {
   gl.disable(gl.BLEND);
 
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, (overlay.par_mode == OVR_PAR_CONFEDS ? textures.towns2 : textures.towns1));
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
   gl.uniform1i(shaders.gauss.uTownsSampler, 2);
   gl.activeTexture(gl.TEXTURE4);
   gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp1);
@@ -603,10 +573,6 @@ function draw_overlay() {
       for (var i=0; i<data.alliances.length; i++)
         part_pass(data.alliances[i].index / 255, 0);
     }
-    else if (overlay.par_mode == OVR_PAR_CONFEDS) {
-      for (var i=0; i<confeds.length; i++)
-        part_pass(confeds[i].index / 255, 0);
-    }
     overlay.par_data = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH);
     gl.readPixels(0, 0, MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE, overlay.par_data);
     overlay_pass(2, fbs.overlay_max, true);
@@ -680,6 +646,7 @@ function recompute_overlay() {
     overlay.par_mode = overlay.mode.substring(OVR_PAR.length + 1);
     overlay.mode = OVR_PAR;
   }
+  init_towns_tex(0);
   if (overlay.mode != OVR_NONE) draw_overlay();
   else draw();
 }
@@ -732,28 +699,40 @@ function map_mousemove(event) {
       }).show();
     }
     else if (map_state.sel_par) {
-      var message;
+      var message, dy = 20;
       if (overlay.par_mode == OVR_PAR_RACES)
-        message = "race: <strong>" + get_race_name(map_state.sel_par) + "</strong>";
+        message = "<span class=\"hint_label\">race:</span> <strong>" + get_race_name(map_state.sel_par) + "</strong>";
       else if (overlay.par_mode == OVR_PAR_ALLIANCES) {
-        message = "alliance: <strong>";
+        dy = 120;
+        message = "<span class=\"hint_label\">alliance:</span> <strong>";
         var a = data.alliances[map_state.sel_par - 1];
-        message += a.name + "</strong><br />";
-        message += "ticker: <strong>" + a.tck + "</strong><br />";
-        message += "population: " + add_commas(a.p);
-      }
-      else if (overlay.par_mode == OVR_PAR_CONFEDS) {
-        message = "confederation: <strong>";
-        var conf = confeds[map_state.sel_par - 1];
-        message += conf.name + "</strong><br />";
-        message += "population: " + add_commas(conf.p);
+        message += a.name + "</strong> (ticker: <strong>" + a.tck + "</strong>)";
+        message += "<br /><span class=\"hint_label\">founded:</span> " + a.date;
+        message += "<br /><span class=\"hint_label\">population:</span> " + add_commas(a.p) + " (" + a.m + " members)" + "<br />";
+        if (a.conf.length > 0) {
+          message += "<br /><span class=\"hint_label\">confeds:</span> <span style=\"color:#99FF99;font-weight:bold\">";
+          for (var i=0; i<a.conf.length; i++)
+            message += (i ? ", ": "") + a.conf[i].tck;
+          message += "</span>";
+        }
+        if (a.NAP.length > 0) {
+          message += "<br /><span class=\"hint_label\">NAPs:</span> ";
+          for (var i=0; i<a.NAP.length; i++)
+            message += (i ? ", ": "") + a.NAP[i].tck;
+        }
+        if (a.war.length > 0) {
+          message += "<br /><span class=\"hint_label\">wars:</span> <span style=\"color:#FF3333;font-weight:bold\">";
+          for (var i=0; i<a.war.length; i++)
+            message += (i ? ", ": "") + a.war[i].name + " (" + a.war[i].tck + ")";
+          message += "</span>";
+        }
       }
       $("#infobox").html(message);
       var pos = $("#map").position();
       $("#infobox").css({
           position: "absolute",
-          top: (event.pageY - 100) + "px",
-          left: (event.pageX - 20) + "px"
+          top: (pos.top + MAP_WIDTH - map_state.my - dy) + "px",
+          left: (pos.left + map_state.mx + 15) + "px"
       }).show();
     }
     if (map_state.sel_par != old_sel_par)
@@ -804,10 +783,13 @@ function loadXml() {
         a.id = parseInt(xml_a.children("alliance").attr("id"));
         a.name = xml_a.children("alliance").text();
         a.tck = xml_a.children("allianceticker").text();
+        a.date = xml_a.children("foundeddatetime").text().substring(0, 10);
         var mem = parseInt(xml_a.children("membercount").text());
+        a.m = mem;
         if (mem > 0) {
           a.NAP = [];
           a.conf = [];
+          a.war = [];
           xml_a.find("relationship").each(function () {
             var xml_rel = $(this);
             var t = xml_rel.children("relationshiptype").text();
@@ -815,6 +797,7 @@ function loadXml() {
             if (al_id == a.id) al_id = xml_rel.children("acceptedbyalliance").attr("id");
             if (t == "NAP") a.NAP.push(parseInt(al_id));
             else if (t == "Confederation") a.conf.push(parseInt(al_id));
+            else if (t == "War") a.war.push(parseInt(al_id));
           });
           data.alliances.push(a);
         }
@@ -831,14 +814,14 @@ function loadXml() {
     success: function(xml) {
       var server = $(xml).children("towns").children("server");
       data.server = server.children("name").text();
-      data.date = server.children("datagenerationdatetime").text();
+      data.date = server.children("datagenerationdatetime").text().substring(0, 10);
       $(xml).children("towns").children("town").each(function() {
         var t = {}, xml_t = $(this);
         var loc = xml_t.children("location"), pl = xml_t.children("player"), dat = xml_t.children("towndata");
+        //t.d = dat.children("foundeddatetime").text().substring(2, 5);
         t.p = parseInt(dat.children("population").text());
         if (dat.children("isalliancecapitalcity").text() == "1") {
           t.c = 1;
-          t.pl = pl.children("playername").text();
           t.name = dat.children("townname").text();
         }
         t.x = parseInt(loc.children("mapx").text());

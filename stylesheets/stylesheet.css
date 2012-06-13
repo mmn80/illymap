@@ -92,6 +92,12 @@ select {
   width: 50px;
 }
 
+/* hosters: comment this to use the xml2json button; also make #header_right.width: 700px */
+#xml2json {
+  display: none;
+  width: 0px;
+}
+
 
 
 
@@ -106,10 +112,14 @@ canvas {
   display: none;
   position: absolute;
   left: 100px;
-  top: 200px;
+  top: 100px;
   width: 800px;
   height: 800px;
   overflow: auto;
+  border: 1px solid #CCCCCC;
+  font-family: Andale Mono, Courier New, monospace;
+  font-size: 10px;
+  z-index: 1;
 }
 
 #pos_info {
@@ -126,6 +136,7 @@ canvas {
   text-shadow: #0090ff 0px 0px 2px;
   line-height: 1;
 }
+
 
 
 
@@ -184,11 +195,17 @@ a:hover {
 #infobox, .tooltip::after {
   position: absolute;
   padding: 3px 7px;
-  min-width: 100px;
+  min-width: 150px;
   border-radius: 8px 8px 8px 0px;
   color: #FFF;
   background: rgba(199, 159, 0, 0.8);
   box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.5);
   font-size: 12px;
   font-weight: normal;
+}
+
+.hint_label {
+  font-style: italic;
+  display: inline-block;
+  min-width: 70px;
 }

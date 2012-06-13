@@ -2,3 +2,4 @@ illymap.geany
 node_modules/*
 server.js
 javascripts/gl-matrix.js
+data/data_*

@@ -281,7 +281,7 @@
               <div id="server_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">server:?<br/>date:?<br/></div>
             </div>
             <div class="ui_panel">
-              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Heat maps should be completed instantly. Alliance/Confed partition is the heaviest GPU computation, with time ~ sigma. At sigma = 15 it can take ~4 sec on a HD7950 during which your screen may freeze. Don't worry ;)">Overlay:</label>
+              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Heat maps should be completed instantly. Alliance Partition is the heaviest GPU computation, with time ~ sigma. At sigma = 15 it can take ~4 sec on a HD7950 during which your screen may freeze for short intervals. Don't worry, just let it finish ;)">Overlay:</label>
               <select id="overlay_mode">
                 <option value="none" selected="selected">None</option>
                 <option value="pop">Population</option>
@@ -289,9 +289,8 @@
                 <option value="pop:H">Humans</option>
                 <option value="pop:D">Dwarves</option>
                 <option value="pop:O">Orcs</option>
-                <option value="par:races">Races (Partition)</option>
-                <option value="par:alliances">Alliances (Partition)</option>
-                <option value="par:confeds">Confederations (Partition)</option>
+                <option value="par:races">Races Partition</option>
+                <option value="par:alliances">Alliances Partition</option>
               </select><br />
               <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, but the map is 1:2 vs. in-game squares.">Sigma:</label>
               <select id="std_dev">
@@ -322,7 +321,7 @@
               <input id="show_towns" type="checkbox" /> <label for="show_towns" class="tooltip" data-tooltip="Show towns as blue dots on the map.">Show Towns</label><br />
               <input id="show_capitals" type="checkbox" checked="checked" /> <label for="show_capitals" class="tooltip" data-tooltip="Show alliance capitals as yellow stars. Mouse over them to see more information.">Show Capitals</label>
             </div>
-            <div class="ui_panel" style="display: none"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. This is a static app, and can work locally on a computer (copy all files). To update the dataset: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, copy the data from the screen and paste it into the data/data.json file.">XML2JSON</a></div>
+            <div id="xml2json" class="ui_panel"><a id="xml2json_btn" href="#" class="tooltip" data-tooltip="For hosters. To update data/data.json: After uploading newer versions of datafile_alliances.xml and datafile_towns.xml into the data folder, click this to generate the json data. After generation, paste the data from the screen into the file.">XML2JSON</a></div>
           </form>
         </div>
       </header>

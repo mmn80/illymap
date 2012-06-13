@@ -16,11 +16,9 @@ There is also a 300 uniform array of (medium precision) floats that may cause pr
 Data Files
 ----------
 
-Illymap uses the following data files provided by Illyriad (though the players file is not yet used):
+Illymap uses the following data files provided by Illyriad:
 
 <http://elgea.illyriad.co.uk/data_downloads/datafile_alliances.xml>
-
-<http://elgea.illyriad.co.uk/data_downloads/datafile_players.xml>
 
 <http://elgea.illyriad.co.uk/data_downloads/datafile_towns.xml>
 
