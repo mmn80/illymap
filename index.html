@@ -63,11 +63,15 @@
       uniform sampler2D uTownsSampler;
       uniform sampler2D uOvr0Sampler;
       uniform sampler2D uOvr1Sampler;
+      uniform sampler2D uOvr2Sampler;
       uniform float uKernel[300];
       uniform int uKernelSize;
-      uniform int uRace;
+      uniform vec2 uFilter;
+      uniform int uActiveSampler;
       uniform int uPass;
       uniform float uMaxValue;
+      uniform vec3 uColors[15];
+      uniform float uSelPar;
 
       varying vec2 vTextureCoord;
 
@@ -141,247 +145,108 @@
         return vec2((s * 128.0 + e * 4.0 + m0) / 255.0, m1 / 255.0);
       }
 
-      float getSampleHoriz(vec2 coord) {
-        if (coord.s < 0.0 || coord.s > 1.0) return 0.0;
+      void apply_sample(vec2 coord, float k_val, inout float sum) {
+        if (coord.s < 0.0 || coord.s > 1.0) return;
         vec4 sample = texture2D(uTownsSampler, coord);
-        if (uRace == -1 || uRace == int(sample.a * 256.0))
-          return half2float(sample.rg);
-        return 0.0;
+        if ((uFilter.x == 0.0 || uFilter.x == sample.b) && (uFilter.y == 0.0 || uFilter.y == sample.a))
+          sum += k_val * half2float(sample.rg);
       }
 
-      vec2 apply_kernel(vec2 coord) {
+      const float min_pop = 0.5;
+
+      vec4 apply_kernel(vec2 coord) {
         float sum = 0.0;
         for (int i = 0; i < 300; i++) {
           if (i == uKernelSize) break;
           float delta = 0.001 * (float(i) - floor(float(uKernelSize) / 2.0));
           if (uPass == 0) {
-            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t));
-            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t));
-            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + delta, coord.t + 0.0005));
-            sum += uKernel[i] * getSampleHoriz(vec2(coord.s + 0.0005 + delta, coord.t + 0.0005));
+            apply_sample(vec2(coord.s + delta, coord.t), uKernel[i], sum);
+            apply_sample(vec2(coord.s + 0.0005 + delta, coord.t), uKernel[i], sum);
+            apply_sample(vec2(coord.s + delta, coord.t + 0.0005), uKernel[i], sum);
+            apply_sample(vec2(coord.s + 0.0005 + delta, coord.t + 0.0005), uKernel[i], sum);
           }
-          else {
+          else if (uPass == 1) {
             vec2 pos = vec2(coord.s, coord.t + delta);
             if (pos.t >= 0.0 && pos.t <= 1.0)
               sum += uKernel[i] * half2float(texture2D(uOvr0Sampler, pos).rg);
           }
         }
-        return float2half(sum);
+        vec2 pid = uFilter;
+        if (uPass == 1 && uActiveSampler > 0) {
+          vec4 sample = (uActiveSampler == 1 ? texture2D(uOvr1Sampler, coord) : texture2D(uOvr2Sampler, coord));
+          float sum_p = half2float(sample.rg);
+          if (sum_p > sum && sum_p > min_pop) {
+            sum = sum_p;
+            pid = sample.ba;
+          }
+          else if (sum <= min_pop) pid = vec2(0.0);
+        }
+        vec2 sum_h = float2half(sum);
+        return vec4(sum_h.x, sum_h.y, pid.x, pid.y);
+      }
+
+      bool proc_tex(vec2 coord, int tex_idx) {
+        if (tex_idx == 0) return false;
+        --tex_idx;
+        int size = tex_idx / 5;
+        int mode = tex_idx - 5 * size;
+        size = 4 * (size + 2);
+        int x = int(coord.x * 1000.0);
+        int y = int(coord.y * 1000.0);
+        int d1 = y - x, d2 = x + y;
+        int rx = x - size * (x / size);
+        int ry = y - size * (y / size);
+        if (mode == 3) return rx == 0;
+        else if (mode == 4) return ry == 0;
+        else if (mode == 0) return d1 - size * (d1 / size) == 0;
+        else if (mode == 1) return d2 - size * (d2 / size) == 0;
+        else if (mode == 2) return rx == 0 && ry == 0 || rx == 1 && ry == 0 ||
+          rx == 2 && ry == 0 || rx == 1 && ry == 1 || rx == 1 && ry == size - 1;
       }
 
       void main(void) {
         gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
         if (uPass == 0 || uPass == 1) {
-          vec2 sum = apply_kernel(vTextureCoord);
-          gl_FragColor = vec4(sum.r, sum.g, 0.0, 1.0);
+          gl_FragColor = apply_kernel(vTextureCoord);
         }
         else if (uPass == 2) {
           float max_val = 0.0;
           for (int i = 0; i < 10; i++)
             for (int j = 0; j < 10; j++) {
-              float val = half2float(texture2D(uOvr1Sampler, vTextureCoord + vec2(float(i) * 0.001, float(j) * 0.001)).rg);
+              vec2 pos = vTextureCoord + vec2(float(i) * 0.001, float(j) * 0.001);
+              float val = half2float(uActiveSampler == 1 ? texture2D(uOvr1Sampler, pos).rg : texture2D(uOvr2Sampler, pos).rg);
               if (val > max_val) max_val = val;
             }
           vec2 max_val_half = float2half(max_val);
           gl_FragColor = vec4(max_val_half.r, max_val_half.g, 0.0, 1.0);
         }
         else if (uPass == 3) {
-          gl_FragColor = val2rgb(half2float(texture2D(uOvr1Sampler, vTextureCoord).rg), uMaxValue);
+          gl_FragColor = val2rgb(half2float(uActiveSampler == 1 ? texture2D(uOvr1Sampler, vTextureCoord).rg : texture2D(uOvr2Sampler, vTextureCoord).rg), uMaxValue);
         }
-      }
-    </script>
-
-    <script id="partition-fs" type="x-shader/x-fragment">
-      precision mediump float;
-
-      uniform sampler2D uTownsSampler;
-      uniform sampler2D uIdxSampler;
-      uniform sampler2D uTempSampler;
-      uniform float uKernel[300];
-      uniform int uKernelSize;
-      uniform int uPass;
-      uniform int uPartMode;
-
-      varying vec2 vTextureCoord;
-
-      float half2float(vec2 c) {
-        float b0 = c.s * 255.0;
-        float b1 = c.t * 255.0;
-        float s = (floor(b0 / 128.0) == 0.0 ? 1.0 : -1.0);
-        if (s == -1.0) b0 -= 128.0;
-        float e = floor(b0 / 4.0);
-        b0 -= e * 4.0;
-        float m = b0 * 256.0 + b1;
-        if (e > 0.0 && e < 31.0)
-          return s * pow(2.0, e - 15.0) * (1.0 + m / 1024.0);
-        else if (e == 0.0 && m == 0.0)
-          return 0.0;
-        else if (e == 0.0 && m != 0.0)
-          return s * 6.1035 * (m / 1024.0) * 0.00001;
-        else if (e == 31.0 && m == 0.0)
-          return s * 65504.0; //INF (65504 is max representable value)
-        return 0.0; //NaN
-      }
-
-      vec2 float2half(float c) {
-        float s = 0.0;
-        if (c < 0.0) {
-          s = 1.0;
-          c *= -1.0;
-        }
-        if (c > 65504.0) return (s == 0.0 ? vec2(124.0 / 255.0, 0.0) : vec2(252.0 / 255.0, 0.0)); //INF
-        if (c == 0.0) return vec2(0.0, 0.0);
-        float m, e, ve;
-        if (c < 0.0000610352) { // subnormal; 0.0000610352 = 2^-14
-          e = 0.0;
-          m = c * 16777216.0;   // 16777216.0 = 2^24
-        }
-        else {                  //normal
-          for (float i=-14.0; i<=15.0; i++) {
-            ve = pow(2.0, i);
-            m = c / ve;
-            if (m < 2.0 && m >= 1.0) {
-              e = i + 15.0;
-              m = (m - 1.0) * 1024.0;
-              break;
-            }
+        else if (uPass == 4) {
+          vec4 sample = (uActiveSampler == 1 ? texture2D(uOvr1Sampler, vTextureCoord) : texture2D(uOvr2Sampler, vTextureCoord));
+          float pid = (sample.b > 0.0 ? sample.b : sample.a);
+          if (pid == 0.0) return;
+          bool races = (sample.a > 0.0);
+          int id = int(pid * 255.0) - 1;
+          bool selected = (uSelPar > 0.0 && uSelPar == pid);
+          int tex_idx = id / 15;
+          int col_idx = id - 15 * tex_idx;
+          vec3 color = vec3(0.0);
+          for (int i=0; i<15; i++) {
+            color = uColors[i];
+            if (i == col_idx) break;
           }
-        }
-        float m0 = floor(m / 256.0);
-        float m1 = floor(m - m0 * 256.0);
-        return vec2((s * 128.0 + e * 4.0 + m0) / 255.0, m1 / 255.0);
-      }
-
-      float apply_kernel(vec2 coord, int tile_idx) {
-        float sum = 0.0;
-        float pid = -1.0;
-        float pids[36];
-        for (int i=0; i<36; i++) pids[i] = -1.0;
-        for (int i=0; i<300; i++) {
-          if (i == uKernelSize) break;
-          float delta = 0.001 * (float(i) - floor(float(uKernelSize) / 2.0));
-          for (float dx=0.0; dx<=0.0005; dx+=0.0005)
-            for (float dy=0.0; dy<=0.0005; dy+=0.0005) {
-              vec2 map_pos = vec2(coord.x + delta + dx, coord.y + dy);
-              if (map_pos.x >= 0.0 && map_pos.x <= 1.0) {
-                vec4 sample = texture2D(uTownsSampler, map_pos);
-                float s_pid = (uPartMode == 0 ? sample.a : sample.b);
-                for (int k=0; k<36; k++)
-                  if (pids[k] == s_pid || pids[k] == -1.0) {
-                    pids[k] = s_pid;
-                    if (k == tile_idx) {
-                      if (uPass == 0) pid = s_pid;
-                      else if (uPass == 1) sum += uKernel[i] * half2float(sample.rg);
-                    }
-                    break;
-                  }
-              }
-            }
-        }
-        if (uPass == 0) return pid;
-        else return sum;
-      }
-
-      const float idx_px = 1.0 / (6.0 * 500.0);
-      const float dd = 1.0 / (6.0 * 1000.0);
-
-      float load_val(vec2 coord) {
-        vec4 val_sample = texture2D(uTempSampler, coord);
-        int comp = int(floor(mod(coord.y, idx_px) / dd));
-        if (comp == 0) return half2float(val_sample.rg);
-        else if (comp == 1) return half2float(val_sample.ba);
-        return 0.0;
-      }
-
-      float load_pid(vec2 coord) {
-        vec4 pid_sample = texture2D(uIdxSampler, coord);
-        int comp = int(2.0 * floor(mod(coord.y, idx_px) / dd) + floor(mod(coord.x, idx_px) / dd));
-        if (comp == 0) return pid_sample.r;
-        else if (comp == 1) return pid_sample.g;
-        else if (comp == 2) return pid_sample.b;
-        else if (comp == 3) return pid_sample.a;
-        return -1.0;
-      }
-
-      void main(void) {
-        if (uPass == 0 || uPass == 1) {
-          vec2 tile = vec2(floor(vTextureCoord.x * 6.0), floor(vTextureCoord.y * 6.0));
-          int tile_idx = 6 * int(tile.y) + int(tile.x);
-          vec2 coord = 6.0 * vTextureCoord - tile;
-          if (uPass == 0) {
-            gl_FragColor.r = apply_kernel(coord, tile_idx);
-            gl_FragColor.g = apply_kernel(vec2(coord.x + 0.001, coord.y), tile_idx);
-            gl_FragColor.b = apply_kernel(vec2(coord.x, coord.y + 0.001), tile_idx);
-            gl_FragColor.a = apply_kernel(vec2(coord.x + 0.001, coord.y + 0.001), tile_idx);
+          if (selected) {
+            if (!races) color = vec3(0.0);
+            if (proc_tex(vTextureCoord, tex_idx > 0 ? tex_idx : 3))
+              color = vec3(1.0);
           }
-          else if (uPass == 1) {
-            gl_FragColor.rg = float2half(apply_kernel(coord, tile_idx));
-            gl_FragColor.ba = float2half(apply_kernel(vec2(coord.x, coord.y + 0.001), tile_idx));
+          else {
+            if (proc_tex(vTextureCoord, tex_idx))
+              color = vec3(0.0);
           }
-        }
-        else if (uPass == 2) {
-          gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-          float sums[36];
-          float pids[36];
-          //init pids
-          for (int i=0; i<36; i++) pids[i] = -1.0;
-          for (int tile_idx=0; tile_idx<36; tile_idx++) {
-            int tile_x = int(mod(float(tile_idx), 6.0));
-            int tile_y = int(float(tile_idx - tile_x) / 6.0);
-            vec2 coord = vec2((float(tile_x) + vTextureCoord.x) / 6.0, (float(tile_y) + vTextureCoord.y) / 6.0);
-            pids[tile_idx] = load_pid(coord);
-            if (pids[tile_idx] == -1.0) break;
-          }
-          for (int tile_idx=0; tile_idx<36; tile_idx++) {
-            int tile_x = int(mod(float(tile_idx), 6.0));
-            int tile_y = int(float(tile_idx - tile_x) / 6.0);
-            vec2 coord = vec2((float(tile_x) + vTextureCoord.x) / 6.0, (float(tile_y) + vTextureCoord.y) / 6.0);
-            for (int i=0; i<300; i++) {
-              if (i == uKernelSize) break;
-              float delta = dd * (float(i) - floor(float(uKernelSize) / 2.0));
-              vec2 pos = vec2(coord.s, coord.t + delta);
-              if (pos.t >= 0.0 && pos.t <= 1.0) {
-                float pid = load_pid(pos);
-                for (int k=0; k<36; k++)
-                  if (pids[k] == pid || pids[k] == -1.0) {
-                    pids[k] = pid;
-                    break;
-                  }
-              }
-            }
-          }
-          //compute sums
-          for (int i=0; i<36; i++) sums[i] = 0.0;
-          for (int tile_idx=0; tile_idx<36; tile_idx++) {
-            int tile_x = int(mod(float(tile_idx), 6.0));
-            int tile_y = int(float(tile_idx - tile_x) / 6.0);
-            vec2 coord = vec2((float(tile_x) + vTextureCoord.x) / 6.0, (float(tile_y) + vTextureCoord.y) / 6.0);
-            for (int i=0; i<300; i++) {
-              if (i == uKernelSize) break;
-              float delta = dd * (float(i) - floor(float(uKernelSize) / 2.0));
-              vec2 pos = vec2(coord.s, coord.t + delta);
-              if (pos.t >= 0.0 && pos.t <= 1.0) {
-                float pid = load_pid(pos);
-                for (int k=0; k<36; k++)
-                  if (pids[k] == pid) {
-                    sums[k] += load_val(pos);
-                    break;
-                  }
-              }
-            }
-          }
-          //find max
-          float max_sum = 0.0;
-          float max_pid = -1.0;
-          for (int i=0; i<36; i++)
-            if (sums[i] > max_sum) {
-              max_sum = sums[i];
-              max_pid = pids[i];
-            }
-          //dispaly
-          //if (max_pid == 1.0 / 255.0) gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-          //else gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0);
-          gl_FragColor = vec4(0.0, max_pid, 0.0, 1.0);
+          gl_FragColor = vec4(color.r, color.g, color.b, 1.0);
         }
       }
     </script>
@@ -416,7 +281,7 @@
               <div id="server_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">server:?<br/>date:?<br/></div>
             </div>
             <div class="ui_panel">
-              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Alliance partition is the heaviest computation, and it will eat memory proportional to the maximum number of alliances that have influence over a single spot. To decrease that chance, use a smaller sigma.">Overlay:</label>
+              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Heat maps should be completed instantly. Alliance/Confed partition is the heaviest GPU computation, with time ~ sigma. At sigma = 15 it can take ~4 sec on a HD7950 during which your screen may freeze. Don't worry ;)">Overlay:</label>
               <select id="overlay_mode">
                 <option value="none" selected="selected">None</option>
                 <option value="pop">Population</option>
@@ -428,7 +293,7 @@
                 <option value="par:alliances">Alliances (Partition)</option>
                 <option value="par:confeds">Confederations (Partition)</option>
               </select><br />
-              <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, and the map is 1:2 vs. in-game squares.">Sigma:</label>
+              <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, but the map is 1:2 vs. in-game squares.">Sigma:</label>
               <select id="std_dev">
                 <option value="2">2</option>
                 <option value="5">5</option>
@@ -438,7 +303,7 @@
                 <option value="30">30</option>
                 <option value="50">50</option>
               </select><br />
-              <label id="gamma_label" for="gamma" class="tooltip" data-tooltip="Gamma factor for the false color overlays. Smaller values will create sharper color boundaries.">Gamma:</label>
+              <label id="gamma_label" for="gamma" class="tooltip" data-tooltip="Gamma factor for the false color overlays (heat maps). Smaller values will create sharper color boundaries.">Gamma:</label>
               <select id="gamma">
                 <option value="0.1">0.1</option>
                 <option value="0.2">0.2</option>

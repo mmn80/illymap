@@ -11,40 +11,34 @@ var MAP_WIDTH = 1000;
 var OVR_NONE = "none", OVR_POP = "pop", OVR_PAR = "par";        // overlay modes: none, population density in false colors, or map partition
 var OVR_PAR_RACES = "races", OVR_PAR_ALLIANCES = "alliances",
   OVR_PAR_CONFEDS = "confeds";                                 // submodes for partition mode
-var PAR_COLORS = [ [0xFF,0,0]/*red*/, [0,0xFF,0]/*lime*/, [0,0,0xFF]/*blue*/, [0xFF,0xFF,0]/*yellow*/, [0,0xFF,0xFF]/*cyan*/,
-  [0xFF,0,0xFF]/*fuchsia*/, [0xFF,0xA5,0]/*orange*/, [0,0x80,0]/*green*/, [0x80,0x80,0]/*olive*/, [0,0,0xA0]/*darkblue*/,
-  [0xA5,0x2A,0x2A]/*brown*/, [0x80,0,0x80]/*purple*/, [0xAD,0xD8,0xE6]/*lightblue*/, [0x80,0,0]/*maroon*/, [0xC0,0xC0,0xC0]/*silver*/ ];
+var PAR_COLORS = [
+  [0x00, 0xFF, 0x00],/*lime*/      [0x00, 0x00, 0xFF],/*blue*/   [0xFF, 0x00, 0xFF],/*fuchsia*/
+  [0xFF, 0x00, 0x00],/*red*/       [0x00, 0xFF, 0xFF],/*cyan*/   [0xFF, 0xFF, 0x00],/*yellow*/
+  [0xFF, 0xA5, 0x00],/*orange*/    [0x00, 0x80, 0x00],/*green*/  [0x80, 0x80, 0x00],/*olive*/
+  [0x00, 0x00, 0xA0],/*darkblue*/  [0xA5, 0x2A, 0x2A],/*brown*/  [0x80, 0x00, 0x80],/*purple*/
+  [0xAD, 0xD8, 0xE6],/*lightblue*/ [0x80, 0x00, 0x00],/*maroon*/ [0xC0, 0xC0, 0xC0] /*silver*/];
 var KERNEL_UNIFORM_SIZE = 300;
 
 var data = { server: "", date: "", alliances: [], towns: [] }; // data loaded from the json file, generated based on the Illy-supplied xmls
 
-var capitals = []; // prefiltered list of alliance capitals
+var capitals = [];
+var confeds = [];
+
 var map_state = {
   mx: 0,           // mousex
   my: 0,           // mousey
-  sel_cap: null    // selected (mouse over) alliance capital
+  sel_cap: null,   // selected (mouse over) alliance capital
+  sel_par: 0       // selected (mouse over) partition index
 };
 
-var overlay = {    // object containing overlay data
-  rgb: null,       // OUT: overlay rgb Uint8Array; this is the end result of all overlay computations
-  std_dev: 15,     // IN: standard deviation
+var overlay = {
+  std_dev: 15,
   gamma: 0.8,
-  mode: OVR_NONE,  // IN: overlay mode
-  race: -1,        // IN: race filter code (-1 = no filter)
-  par_mode: "",    // IN: partition submode
-  density: null,   // MAP_WIDTHxMAP_WIDTH Float32Array, values represent populations; used for OVR_POP overlays
-  max_density: 0,  // max value in the density matrix (used for normalization)
-  buffers: [],     // map overlay array buffers used for partition calculations (OVR_PAR), with elements of the form:
-                   // { partition: Uint8Array: partition_ids for each cell,
-                   //   is_output: Uint8Array of bit flags: temp flag (the first pass stores values in temp buffer)
-                   //   density: Float32Array: population density for each cell }
-  partitions: [],  // lookup table for partitions, partition_id is index+1 (0=not allocated), with elements of the form:
-                   // { value: alliance_ID_or_race(based on par_mode),
-                   //   name: display_name,
-                   //   pop: total_population,
-                   //   area: total_domination_area }
-  dominators: null,// Uint8Array containing the partition_ids with most population among all buffers
-  kernels: []      // precomputed gaussian distributions of form { std_dev: val, buffer: Float32Array }
+  mode: OVR_NONE,
+  race: 0,
+  par_mode: "",
+  kernels: [],     // precomputed gaussian distributions of form { std_dev: val, buffer: Float32Array }
+  par_data: null
 }
 
 var gl;
@@ -68,20 +62,20 @@ var buffers = {
 var textures = {
   bg_map: null,
   star: null,
-  towns: null,
+  towns1: null,
+  towns2: null,
   overlay_max: null,
   overlay_temp1: null,
-  overlay_out: null,
-  part_idx: null,
-  part_temp: null
+  overlay_temp2: null,
+  overlay_temp3: null,
+  overlay_out: null
 }
 var fbs = {
   overlay_max: null,   // 100x100
   overlay_temp1: null, // 1000x1000
   overlay_temp2: null, // 1000x1000
-  overlay_out: null,   // 1000x1000
-  part_idx: null,      // 3000x3000 - 4 idx per fragmanet; 6x6=36 buffers/tiles
-  part_temp: null      // 6000x3000 - 2 gauss sums per fragment
+  overlay_temp3: null, // 1000x1000
+  overlay_out: null    // 1000x1000
 }
 
 
@@ -147,31 +141,52 @@ function init_data() {
     town.y1 = Math.round((town.y + MAP_WIDTH) / 2);
     if (town.r === undefined)
       town.r = "H";
-    town.alliance_index = 0;
-    if (town.a > 0)
-      for (var j=0; j<data.alliances.length; j++)
-        if (data.alliances[j].id == town.a) {
-          if (j < 255) town.alliance_index = j + 1;  // 1-based index; 0 = no alliance
-          break;
-        }
-    if (town.c == 1) {
-      town.alliance = "?";
-      for (var j=0; j<data.alliances.length; j++) {
-        var a = data.alliances[j];
-        if (a.id == town.a) {
-          town.alliance = a.name;
-          break;
-        }
+    town.alliance = alliance_by_id(town.a);
+    if (town.alliance) {
+      if (town.alliance.p === undefined) town.alliance.p = 0;
+      town.alliance.p += town.p;
+    }
+    if (town.c == 1) capitals.push(town);
+  }
+  data.alliances.sort(function(a, b) { return b.p - a.p; });
+  for (var i=0; i<data.alliances.length; i++) {
+    var a = data.alliances[i];
+    a.index = i + 1;
+    for (var j=0; j<confeds.length; j++) {
+      var conf = confeds[j];
+      if (confed_has_alliance(conf, a)) {
+        a.confederation = conf;
+        break;
       }
-      capitals.push(town);
+    }
+    if (!a.confederation) {
+      a.confederation = { name: "", alliances: [ a ] };
+      confeds.push(a.confederation);
+    }
+    for (var j=0; j<a.conf.length; j++) {
+      var a1 = alliance_by_id(a.conf[j]);
+      if (a1 && !confed_has_alliance(a.confederation, a1))
+        a.confederation.alliances.push(a1);
     }
   }
-  capitals.sort(function(a, b) { // we need this for proper mouse over triggering when capitals overlap
-    return a.p - b.p;
-  });
+  for (var i=0; i<confeds.length; i++) {
+    var conf = confeds[i];
+    conf.alliances.sort(function(a, b) { return b.p - a.p; });
+    conf.p = 0;
+    for (var j=0; j<conf.alliances.length; j++) {
+      var a = conf.alliances[j];
+      conf.name += (j ? ", " : "") + a.tck;
+      conf.p += a.p;
+    }
+  }
+  confeds.sort(function(a, b) { return b.p - a.p; });
+  for (var i=0; i<confeds.length; i++)
+    confeds[i].index = i + 1;
+  capitals.sort(function(a, b) { return a.p - b.p; });
   init_kernels();
   init_data_buffers();
-  init_towns_tex();
+  init_towns_tex(false);
+  init_towns_tex(true);
   if ($("#overlay_mode").val() != OVR_NONE)
     recompute_overlay();
   else draw();
@@ -234,25 +249,20 @@ function init_shaders() {
   shaders.gauss.uTownsSampler = gl.getUniformLocation(shaders.gauss, "uTownsSampler");
   shaders.gauss.uOvr0Sampler = gl.getUniformLocation(shaders.gauss, "uOvr0Sampler");
   shaders.gauss.uOvr1Sampler = gl.getUniformLocation(shaders.gauss, "uOvr1Sampler");
+  shaders.gauss.uOvr2Sampler = gl.getUniformLocation(shaders.gauss, "uOvr2Sampler");
   shaders.gauss.uKernel = [];
   for (var i=0; i<KERNEL_UNIFORM_SIZE; i++)
     shaders.gauss.uKernel.push(gl.getUniformLocation(shaders.gauss, "uKernel[" + i + "]"));
   shaders.gauss.uKernelSize = gl.getUniformLocation(shaders.gauss, "uKernelSize");
-  shaders.gauss.uRace = gl.getUniformLocation(shaders.gauss, "uRace");
+  shaders.gauss.uFilter = gl.getUniformLocation(shaders.gauss, "uFilter");
+  shaders.gauss.uSelPar = gl.getUniformLocation(shaders.gauss, "uSelPar");
+  shaders.gauss.uActiveSampler = gl.getUniformLocation(shaders.gauss, "uActiveSampler");
   shaders.gauss.uPass = gl.getUniformLocation(shaders.gauss, "uPass");
   shaders.gauss.uMaxValue = gl.getUniformLocation(shaders.gauss, "uMaxValue");
   shaders.gauss.uGamma = gl.getUniformLocation(shaders.gauss, "uGamma");
-  shaders.part = create_program("partition-fs", "main_shader-vs");
-  if (!shaders.part) return false;
-  shaders.part.uTownsSampler = gl.getUniformLocation(shaders.part, "uTownsSampler");
-  shaders.part.uIdxSampler = gl.getUniformLocation(shaders.part, "uIdxSampler");
-  shaders.part.uTempSampler = gl.getUniformLocation(shaders.part, "uTempSampler");
-  shaders.part.uKernel = [];
-  for (var i=0; i<KERNEL_UNIFORM_SIZE; i++)
-    shaders.part.uKernel.push(gl.getUniformLocation(shaders.part, "uKernel[" + i + "]"));
-  shaders.part.uKernelSize = gl.getUniformLocation(shaders.part, "uKernelSize");
-  shaders.part.uPass = gl.getUniformLocation(shaders.part, "uPass");
-  shaders.part.uPartMode = gl.getUniformLocation(shaders.part, "uPartMode");
+  shaders.gauss.uColors = [];
+  for (var i=0; i<PAR_COLORS.length; i++)
+    shaders.gauss.uColors.push(gl.getUniformLocation(shaders.gauss, "uColors[" + i + "]"));
   return true;
 }
 
@@ -301,24 +311,13 @@ function init_overlay_fb_tex() {
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp2);
   textures.overlay_temp2 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
 
+  fbs.overlay_temp3 = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp3);
+  textures.overlay_temp3 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
+
   fbs.overlay_out = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_out);
   textures.overlay_out = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
-
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.bindTexture(gl.TEXTURE_2D, null);
-}
-
-function init_part_fb_tex() {
-  if (fbs.part_idx) return;
-
-  fbs.part_idx = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.part_idx);
-  textures.part_idx = attach_tex_to_fb(MAP_WIDTH * 3, MAP_WIDTH * 3);  // 4 ids per fragment
-
-  fbs.part_temp = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.part_temp);
-  textures.part_temp = attach_tex_to_fb(MAP_WIDTH * 6, MAP_WIDTH * 3); // 2 halfs per fragment
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.bindTexture(gl.TEXTURE_2D, null);
@@ -342,8 +341,6 @@ function init_static_buffers() {
 
   buffers.mapPos = create_quad(MAP_WIDTH, MAP_WIDTH);
   buffers.maxPos = create_quad(MAP_WIDTH / 10, MAP_WIDTH / 10);
-  buffers.partIdxPos = create_quad(MAP_WIDTH * 3, MAP_WIDTH * 3);
-  buffers.partTempPos = create_quad(MAP_WIDTH * 6, MAP_WIDTH * 3);
 
   buffers.texPos = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
@@ -422,7 +419,7 @@ function init_data_buffers() {
   buffers.selStarTexPos.numItems = 6;
 }
 
-function init_towns_tex() {
+function init_towns_tex(confeds_mode) {
   var buffer = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH * 16));
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
@@ -430,11 +427,18 @@ function init_towns_tex() {
     var half = float2half(town.p);
     buffer[idx] = half[0];
     buffer[idx + 1] = half[1];
-    buffer[idx + 2] = town.alliance_index;
+    buffer[idx + 2] = (town.alliance ? (confeds_mode ? town.alliance.confederation.index : town.alliance.index) : 0);
     buffer[idx + 3] = get_race_code(town.r);
   }
-  textures.towns = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  var tex;
+  if (confeds_mode) {
+    textures.towns2 = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, textures.towns2);
+  }
+  else {
+    textures.towns1 = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, textures.towns1);
+  }
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2 * MAP_WIDTH, 2 * MAP_WIDTH, 0, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -471,7 +475,7 @@ function draw() {
   // draw background map and/or overlay
 
   gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns1);
   gl.uniform1i(shaders.main.uTownsSampler, 2);
 
   gl.uniform1i(shaders.main.uShowBg, v_map);
@@ -504,29 +508,52 @@ function draw() {
   }
 }
 
-function upload_kernel(shader) {
+function draw_overlay_init() {
+  gl.useProgram(shaders.gauss);
+  gl.disable(gl.BLEND);
+
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, (overlay.par_mode == OVR_PAR_CONFEDS ? textures.towns2 : textures.towns1));
+  gl.uniform1i(shaders.gauss.uTownsSampler, 2);
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp1);
+  gl.uniform1i(shaders.gauss.uOvr0Sampler, 4);
+  gl.activeTexture(gl.TEXTURE5);
+  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp2);
+  gl.uniform1i(shaders.gauss.uOvr1Sampler, 5);
+  gl.activeTexture(gl.TEXTURE6);
+  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp3);
+  gl.uniform1i(shaders.gauss.uOvr2Sampler, 6);
+
+  mat4.identity(mvMatrix);
+  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
+  gl.uniformMatrix4fv(shaders.gauss.uMVMatrix, false, mvMatrix);
+  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
+  gl.uniformMatrix4fv(shaders.gauss.uPMatrix, false, pMatrix);
+
+  gl.uniform1f(shaders.gauss.uGamma, overlay.gamma);
+
   var kernel = null;
   for (var i=0; i<overlay.kernels.length; i++)
     if (overlay.kernels[i].std_dev == overlay.std_dev) {
       kernel = overlay.kernels[i].buffer;
       break;
     }
-  gl.uniform1i(shader.uKernelSize, kernel.length);
+  gl.uniform1i(shaders.gauss.uKernelSize, kernel.length);
   for (var i=0; i<kernel.length && i<KERNEL_UNIFORM_SIZE; i++)
-    gl.uniform1f(shader.uKernel[i], kernel[i]);
+    gl.uniform1f(shaders.gauss.uKernel[i], kernel[i]);
 }
 
-function overlay_pass(shader, pass, fb, vtx_buffer, width, height, get_max_pass) {
-  gl.uniform1i(shader.uPass, pass);
-  if (get_max_pass) gl.uniform1f(shader.uMaxValue, 1.0);
-  mat4.ortho(0, width, 0, height, 0, 10, pMatrix);
-  gl.uniformMatrix4fv(shader.uPMatrix, false, pMatrix);
+function overlay_pass(pass, fb, get_max_pass) {
+  var vtx_buffer = (get_max_pass ? buffers.maxPos : buffers.mapPos);
+  gl.uniform1i(shaders.gauss.uPass, pass);
+  if (get_max_pass) gl.uniform1f(shaders.gauss.uMaxValue, 1.0);
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
-  gl.vertexAttribPointer(shader.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(shaders.gauss.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
-  gl.vertexAttribPointer(shader.aTextureCoord, buffers.texPos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(shaders.gauss.aTextureCoord, buffers.texPos.itemSize, gl.FLOAT, false, 0, 0);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, vtx_buffer.numItems);
   if (get_max_pass) {
     var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
@@ -537,66 +564,63 @@ function overlay_pass(shader, pass, fb, vtx_buffer, width, height, get_max_pass)
       if (val > max_val)
         max_val = val;
     }
-    gl.uniform1f(shader.uMaxValue, max_val);
+    gl.uniform1f(shaders.gauss.uMaxValue, max_val);
   }
 }
 
-function draw_heat() {
-  gl.useProgram(shaders.gauss);
-
-  gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
-  gl.uniform1i(shaders.gauss.uTownsSampler, 2);
-  gl.activeTexture(gl.TEXTURE4);
-  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp1);
-  gl.uniform1i(shaders.gauss.uOvr0Sampler, 4);
-  gl.activeTexture(gl.TEXTURE5);
-  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp2);
-  gl.uniform1i(shaders.gauss.uOvr1Sampler, 5);
-
-  mat4.identity(mvMatrix);
-  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
-  gl.uniformMatrix4fv(shaders.gauss.uMVMatrix, false, mvMatrix);
-
-  gl.uniform1i(shaders.gauss.uRace, overlay.race);
-  gl.uniform1f(shaders.gauss.uGamma, overlay.gamma);
+function draw_overlay() {
+  draw_overlay_init();
+  gl.uniform2f(shaders.gauss.uFilter, 0, overlay.race / 255 );
+  gl.uniform1i(shaders.gauss.uActiveSampler, 0);
   gl.uniform1f(shaders.gauss.uMaxValue, 0.0);
-  upload_kernel(shaders.gauss);
-
-  overlay_pass(shaders.gauss, 0, fbs.overlay_temp1, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
-  overlay_pass(shaders.gauss, 1, fbs.overlay_temp2, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
-  overlay_pass(shaders.gauss, 2, fbs.overlay_max, buffers.maxPos, MAP_WIDTH, MAP_WIDTH, true);
-  overlay_pass(shaders.gauss, 3, fbs.overlay_out, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
-
+  if (overlay.mode == OVR_POP) {
+    overlay_pass(0, fbs.overlay_temp1, false);
+    overlay_pass(1, fbs.overlay_temp2, false);
+    gl.uniform1i(shaders.gauss.uActiveSampler, 1);
+    overlay_pass(2, fbs.overlay_max, true);
+    overlay_pass(3, fbs.overlay_out, false);
+  }
+  else if (overlay.mode == OVR_PAR) {
+    for (var i=0; i<PAR_COLORS.length; i++) {
+      var c = PAR_COLORS[i];
+      gl.uniform3f(shaders.gauss.uColors[i], c[0] / 255, c[1] / 255, c[2] / 255);
+    }
+    var active_s = 0;
+    var part_pass = function(f0, f1) {
+      gl.uniform2f(shaders.gauss.uFilter, f0, f1);
+      overlay_pass(0, fbs.overlay_temp1, false);
+      overlay_pass(1, (active_s != 1 ? fbs.overlay_temp2 : fbs.overlay_temp3), false);
+      if (active_s != 1) active_s = 1;
+      else active_s = 2;
+      gl.uniform1i(shaders.gauss.uActiveSampler, active_s);
+    };
+    if (overlay.par_mode == OVR_PAR_RACES) {
+      var races = ["E", "H", "D", "O"];
+      for (var i=0; i<races.length; i++)
+        part_pass(0, get_race_code(races[i]) / 255);
+    }
+    else if (overlay.par_mode == OVR_PAR_ALLIANCES) {
+      for (var i=0; i<data.alliances.length; i++)
+        part_pass(data.alliances[i].index / 255, 0);
+    }
+    else if (overlay.par_mode == OVR_PAR_CONFEDS) {
+      for (var i=0; i<confeds.length; i++)
+        part_pass(confeds[i].index / 255, 0);
+    }
+    overlay.par_data = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH);
+    gl.readPixels(0, 0, MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE, overlay.par_data);
+    overlay_pass(2, fbs.overlay_max, true);
+    overlay_pass(4, fbs.overlay_out, false);
+  }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   draw();
 }
 
-function draw_partition() {
-  gl.useProgram(shaders.part);
-
-  gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
-  gl.uniform1i(shaders.part.uTownsSampler, 2);
-  gl.activeTexture(gl.TEXTURE6);
-  gl.bindTexture(gl.TEXTURE_2D, textures.part_idx);
-  gl.uniform1i(shaders.part.uIdxSampler, 6);
-  gl.activeTexture(gl.TEXTURE7);
-  gl.bindTexture(gl.TEXTURE_2D, textures.part_temp);
-  gl.uniform1i(shaders.part.uTempSampler, 7);
-
-  mat4.identity(mvMatrix);
-  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
-  gl.uniformMatrix4fv(shaders.part.uMVMatrix, false, mvMatrix);
-  upload_kernel(shaders.part);
-  gl.uniform1i(shaders.part.uPartMode, get_par_mode_code());
-
-  overlay_pass(shaders.part, 0, fbs.part_idx, buffers.partIdxPos, MAP_WIDTH * 3, MAP_WIDTH * 3, false);
-  overlay_pass(shaders.part, 1, fbs.part_temp, buffers.partTempPos, MAP_WIDTH * 6, MAP_WIDTH * 3, false);
-  overlay_pass(shaders.part, 2, fbs.overlay_out, buffers.mapPos, MAP_WIDTH, MAP_WIDTH, false);
-
+function draw_par_last() {
+  draw_overlay_init();
+  gl.uniform1f(shaders.gauss.uSelPar, map_state.sel_par / 255);
+  overlay_pass(4, fbs.overlay_out, false);
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  draw();
 }
 
 function draw_map(v_map, grayed) {
@@ -644,12 +668,30 @@ function draw_stars(vtx_buffer, tex_buffer, color) {
 
 // control *********************************************************************
 
+function recompute_overlay() {
+  overlay.std_dev = parseInt($("#std_dev").val());
+  overlay.mode = $("#overlay_mode").val();
+  overlay.gamma = parseFloat($("#gamma").val());
+  if (overlay.mode.indexOf(OVR_POP) == 0) {
+    overlay.race = get_race_code(overlay.mode.substring(OVR_POP.length + 1));
+    overlay.mode = OVR_POP;
+  }
+  else if (overlay.mode.indexOf(OVR_PAR) == 0) {
+    overlay.par_mode = overlay.mode.substring(OVR_PAR.length + 1);
+    overlay.mode = OVR_PAR;
+  }
+  if (overlay.mode != OVR_NONE) draw_overlay();
+  else draw();
+}
+
 function map_mousemove(event) {
   var old_sel_cap = map_state.sel_cap;
   map_state.sel_cap = null;
+  var old_sel_par = map_state.sel_par;
+  map_state.sel_par = 0;
   var off = $("#map").offset();
-  map_state.mx = event.pageX - off.left;
-  map_state.my = MAP_WIDTH - event.pageY + off.top;
+  map_state.mx = parseInt(event.pageX - off.left);
+  map_state.my = MAP_WIDTH - parseInt(event.pageY - off.top);
   map_state.illy_x = map_state.mx * 2 - MAP_WIDTH;
   map_state.illy_y = map_state.my * 2 - MAP_WIDTH;
   var illyx = map_state.illy_x.toString(), illyy = map_state.illy_y.toString();
@@ -670,13 +712,18 @@ function map_mousemove(event) {
           break;
         }
     }
-  if (map_state.sel_cap != old_sel_cap) {
-    if (!map_state.sel_cap)
+  if (overlay.mode == OVR_PAR && overlay.par_data) {
+    var idx = 4 * (map_state.my * MAP_WIDTH + map_state.mx) + 2;
+    if (overlay.par_mode == OVR_PAR_RACES) idx++;
+    map_state.sel_par = overlay.par_data[idx];
+  }
+  if (map_state.sel_cap != old_sel_cap || map_state.sel_par != old_sel_par) {
+    if (!map_state.sel_cap && !map_state.sel_par)
       $("#infobox").hide();
-    else {
+    else if (map_state.sel_cap) {
       $("#infobox").html("<i>" + map_state.sel_cap.name + "</i><br />" +
-        "capital of <strong>" + map_state.sel_cap.alliance + "</strong><br />" +
-        "population " + map_state.sel_cap.p);
+        "capital of <strong>" + map_state.sel_cap.alliance.name + "</strong><br />" +
+        "population: " + add_commas(map_state.sel_cap.p));
       var pos = $("#map").position();
       $("#infobox").css({
           position: "absolute",
@@ -684,36 +731,51 @@ function map_mousemove(event) {
           left: (pos.left + town.x1 + 15) + "px"
       }).show();
     }
+    else if (map_state.sel_par) {
+      var message;
+      if (overlay.par_mode == OVR_PAR_RACES)
+        message = "race: <strong>" + get_race_name(map_state.sel_par) + "</strong>";
+      else if (overlay.par_mode == OVR_PAR_ALLIANCES) {
+        message = "alliance: <strong>";
+        var a = data.alliances[map_state.sel_par - 1];
+        message += a.name + "</strong><br />";
+        message += "ticker: <strong>" + a.tck + "</strong><br />";
+        message += "population: " + add_commas(a.p);
+      }
+      else if (overlay.par_mode == OVR_PAR_CONFEDS) {
+        message = "confederation: <strong>";
+        var conf = confeds[map_state.sel_par - 1];
+        message += conf.name + "</strong><br />";
+        message += "population: " + add_commas(conf.p);
+      }
+      $("#infobox").html(message);
+      var pos = $("#map").position();
+      $("#infobox").css({
+          position: "absolute",
+          top: (event.pageY - 100) + "px",
+          left: (event.pageX - 20) + "px"
+      }).show();
+    }
+    if (map_state.sel_par != old_sel_par)
+      draw_par_last();
     draw();
   }
 }
 
 function map_mouseout(event) {
   $("#pos_info").hide();
+  $("#infobox").hide();
+  if (map_state.sel_par > 0) {
+    map_state.sel_par = 0;
+    draw_par_last();
+    draw();
+  }
 }
 
 function map_dblclick(event) {
   var x = (event.pageX - this.offsetLeft) * 2 - MAP_WIDTH;
   var y = MAP_WIDTH - (event.pageY - this.offsetTop) * 2;
   window.open(ILLY_MAP_URL.replace("{x}", x).replace("{y}", y), '_blank');
-}
-
-function recompute_overlay() {
-  overlay.std_dev = parseInt($("#std_dev").val());
-  overlay.mode = $("#overlay_mode").val();
-  overlay.gamma = parseFloat($("#gamma").val());
-  if (overlay.mode.indexOf(OVR_POP) == 0) {
-    overlay.race = get_race_code(overlay.mode.substring(OVR_POP.length + 1));
-    overlay.mode = OVR_POP;
-  }
-  else if (overlay.mode.indexOf(OVR_PAR) == 0) {
-    overlay.par_mode = overlay.mode.substring(OVR_PAR.length + 1);
-    overlay.mode = OVR_PAR;
-    init_part_fb_tex();
-  }
-  if (overlay.mode == OVR_POP) draw_heat();
-  else if (overlay.mode == OVR_PAR) draw_partition();
-  else draw();
 }
 
 // converts xml files from Illyriad (~17MB) to a more compact json (~1.3MB)
@@ -826,18 +888,34 @@ function get_shader(gl, id) {
 }
 
 function get_race_code(race_str) {
-  var r = -1;
-  if (race_str == "E") r = 0;
-  else if (race_str == "H") r = 1;
-  else if (race_str == "D") r = 2;
-  else if (race_str == "O") r = 3;
-  return r;
+  if (race_str == "E") return 1;
+  else if (race_str == "H") return 2;
+  else if (race_str == "D") return 3;
+  else if (race_str == "O") return 4;
+  return 0;
 }
 
-function get_par_mode_code() {
-  if (overlay.par_mode == OVR_PAR_RACES) return 0;
-  else if (overlay.par_mode == OVR_PAR_ALLIANCES) return 1;
-  else if (overlay.par_mode == OVR_PAR_CONFEDS) return 2;
+function get_race_name(race_code) {
+  if (race_code == 1) return "Elves";
+  else if (race_code == 2) return "Humans";
+  else if (race_code == 3) return "Dwarves";
+  else if (race_code == 4) return "Orcs";
+  return "?";
+}
+
+function alliance_by_id(id) {
+  for (var i=0; i<data.alliances.length; i++) {
+    var a = data.alliances[i];
+    if (a.id == id) return a;
+  }
+  return null;
+}
+
+function confed_has_alliance(conf, a) {
+  for (var k=0; k<conf.alliances.length; k++)
+    if (conf.alliances[k] == a)
+      return true;
+  return false;
 }
 
 function half2float(b0, b1) {
@@ -882,4 +960,16 @@ function float2half(c) {
   var m0 = Math.floor(m / 256);
   var m1 = Math.floor(m - m0 * 256);
   return [s * 128 + e * 4 + m0, m1];
+}
+
+function add_commas(str) {
+  str += '';
+  var x = str.split('.');
+  var x1 = x[0];
+  var x2 = x.length > 1 ? '.' + x[1] : '';
+  var rgx = /(\d+)(\d{3})/;
+  while (rgx.test(x1)) {
+    x1 = x1.replace(rgx, '$1' + ',' + '$2');
+  }
+  return x1 + x2;
 }
