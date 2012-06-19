@@ -321,7 +321,7 @@
               <div id="server_info" class="tooltip" data-tooltip="Double-click on the map to open a new tab with the Illyriad map page centered on the position.">server:?<br/>date:?<br/></div>
             </div>
             <div class="ui_panel">
-              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Heat maps should be completed instantly. Alliance Partition is the heaviest GPU computation, with time ~ sigma. At sigma = 15 it can take ~4 sec on a HD7950 during which your screen may freeze for short intervals. Don't worry, just let it finish ;)">Overlay:</label>
+              <label id="overlay_mode_label" for="overlay_mode" class="tooltip" data-tooltip="Select the map overlay mode. Heat maps should complete instantly. Alliance Partition is the heaviest GPU computation, with time ~ sigma. At sigma = 15 it should take ~4 sec on a HD7950.">Overlay:</label>
               <select id="overlay_mode">
                 <option value="none" selected="selected">None</option>
                 <option value="pop">Population</option>
@@ -332,7 +332,7 @@
                 <option value="par:races">Races Partition</option>
                 <option value="par:alliances">Alliances Partition</option>
               </select><br />
-              <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays. Units are map-units, but the map is 1:2 vs. in-game squares.">Sigma:</label>
+              <label id="std_dev_label" for="std_dev" class="tooltip" data-tooltip="The population of each city is spread out according to a normal (Gaussian) distribution. With this option you can change its standard deviation. Higher values will give a smoother appearence to the overlays, but increase computation time. Units are map-units (1:2 vs. in-game squares).">Sigma:</label>
               <select id="std_dev">
                 <option value="2">2</option>
                 <option value="5">5</option>
