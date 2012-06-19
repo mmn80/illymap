@@ -209,3 +209,9 @@ a:hover {
   display: inline-block;
   min-width: 70px;
 }
+
+.chuggin {
+  font-family: Andale Mono, Courier New, monospace;
+  font-weight: bold;
+  font-size: 18px;
+}
