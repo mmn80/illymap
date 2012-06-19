@@ -231,8 +231,6 @@ function init_webgl() {
     return false;
   }
   else {
-    gl.viewportWidth = canvas.width;
-    gl.viewportHeight = canvas.height;
     if (!init_shaders()) return false;
     init_static_buffers();
     textures.bg_map = gl.createTexture();
@@ -253,16 +251,16 @@ function init_shaders() {
   shaders.main.show_bg = gl.getUniformLocation(shaders.main, "show_bg");
   shaders.main.grey_bg = gl.getUniformLocation(shaders.main, "grey_bg");
   shaders.main.show_towns = gl.getUniformLocation(shaders.main, "show_towns");
-  
+
   shaders.overlay = create_program("overlay-fs", "main-vs");
   if (!shaders.overlay) return false;
   shaders.overlay.sampler = gl.getUniformLocation(shaders.overlay, "sampler");
-  
+
   shaders.stars = create_program("stars-fs", "main-vs");
   if (!shaders.stars) return false;
   shaders.stars.sampler = gl.getUniformLocation(shaders.stars, "sampler");
   shaders.stars.color = gl.getUniformLocation(shaders.stars, "color");
-  
+
   shaders.gauss_h = create_program("gauss_h-fs", "main-vs");
   if (!shaders.gauss_h) return false;
   shaders.gauss_h.sampler_towns = gl.getUniformLocation(shaders.gauss_h, "sampler_towns");
@@ -289,21 +287,21 @@ function init_shaders() {
   shaders.gauss_v.end_index = gl.getUniformLocation(shaders.gauss_v, "end_index");
   shaders.gauss_v.filter = gl.getUniformLocation(shaders.gauss_v, "filter");
   shaders.gauss_v.compare = gl.getUniformLocation(shaders.gauss_v, "compare");
-  
+
   shaders.max_h = create_program("max_h-fs", "main-vs");
   if (!shaders.max_h) return false;
   shaders.max_h.sampler = gl.getUniformLocation(shaders.max_h, "sampler");
-  
+
   shaders.max_v = create_program("max_v-fs", "main-vs");
   if (!shaders.max_v) return false;
   shaders.max_v.sampler = gl.getUniformLocation(shaders.max_v, "sampler");
-  
+
   shaders.heat = create_program("heat-fs", "main-vs");
   if (!shaders.heat) return false;
   shaders.heat.sampler = gl.getUniformLocation(shaders.heat, "sampler");
   shaders.heat.max_value = gl.getUniformLocation(shaders.heat, "max_value");
   shaders.heat.gamma = gl.getUniformLocation(shaders.heat, "gamma");
-  
+
   shaders.partition = create_program("partition-fs", "main-vs");
   if (!shaders.partition) return false;
   shaders.partition.races_mode = gl.getUniformLocation(shaders.partition, "races_mode");
@@ -341,7 +339,7 @@ function init_overlay_fb_tex() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.gauss[i]);
     textures.gauss[i] = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH, gl.RGB, gl.FLOAT);
   }
-  
+
   fbs.max_h = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.max_h);
   textures.max_h = attach_tex_to_fb(MAP_WIDTH / 10, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -349,7 +347,7 @@ function init_overlay_fb_tex() {
   fbs.max_v = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.max_v);
   textures.max_v = attach_tex_to_fb(MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE);
-  
+
   fbs.overlay_out = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_out);
   textures.overlay_out = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE);
@@ -494,24 +492,24 @@ function draw() {
   var v_map = $("#show_map").is(':checked');
   var v_tow = $("#show_towns").is(':checked');
   var v_cap = $("#show_capitals").is(':checked');
-  
+
   mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, p_mat);
   mat4.identity(mv_mat);
   mat4.translate(mv_mat, [0.0, 0.0, -5.0]);
-  
+
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+  gl.viewport(0, 0, MAP_WIDTH, MAP_WIDTH);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   //gl.disable(gl.DEPTH_TEST);
-  
+
   if (v_map || v_tow)
     draw_map(v_map, v_tow, v_cap);
-    
+
   if (overlay.mode != OVR_NONE)
     draw_overlay();
-    
+
   if (v_cap) {
     gl.useProgram(shaders.stars);
     gl.uniformMatrix4fv(shaders.stars.p_mat, false, p_mat);
@@ -539,10 +537,10 @@ function draw_map(v_map, v_tow, v_cap) {
   gl.uniform1i(shaders.main.show_bg, v_map);
   gl.uniform1i(shaders.main.show_towns, v_tow);
   gl.uniform1i(shaders.main.grey_bg, v_cap || v_tow || overlay.mode != OVR_NONE);
-  
+
   gl.uniformMatrix4fv(shaders.main.mv_mat, false, mv_mat);
   gl.uniformMatrix4fv(shaders.main.p_mat, false, p_mat);
-  
+
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex_pos);
   gl.vertexAttribPointer(shaders.main.a_tex_pos, buffers.tex_pos.itemSize, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.map_pos);
@@ -562,7 +560,7 @@ function draw_overlay() {
   mat4.translate(mv_mat, [0, 0, 1.0]);
   gl.uniformMatrix4fv(shaders.overlay.mv_mat, false, mv_mat);
   gl.uniformMatrix4fv(shaders.overlay.p_mat, false, p_mat);
-  
+
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex_pos);
   gl.vertexAttribPointer(shaders.overlay.a_tex_pos, buffers.tex_pos.itemSize, gl.FLOAT, false, 0, 0);
   gl.bindBuffer(gl.ARRAY_BUFFER, buffers.map_pos);
@@ -574,10 +572,10 @@ function draw_overlay() {
 function draw_stars(vtx_buffer, tex_buffer, color) {
   gl.uniform3f(shaders.stars.color, color.r / 255, color.g / 255, color.b / 255);
   gl.uniformMatrix4fv(shaders.stars.mv_mat, false, mv_mat);
-  
+
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
-    
+
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, textures.star);
   gl.uniform1i(shaders.stars.sampler, 1);
@@ -621,7 +619,7 @@ function recompute_overlay_draw() {
   mat4.identity(mv_mat);
   mat4.translate(mv_mat, [0.0, 0.0, -4.0]);
   mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, p_mat);
-  
+
   if (overlay.mode == OVR_POP) {
     var filter = overlay.race / 255;
     draw_gauss_h(filter);
@@ -639,17 +637,17 @@ function recompute_overlay_draw() {
       draw_gauss_v(p_data[idx], idx > 0);
       idx++;
       if (idx < p_data.length)
-        setTimeout(function () { part_pass() }, 10);
-      else last_step();
+        setTimeout(function () { part_pass(); }, 10);
+      else setTimeout(function () { last_step(); }, 10);
     };
     var last_step = function() {
       overlay.par_data = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH);
       gl.readPixels(0, 0, MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE, overlay.par_data);
       draw_partition();
       draw();
-      enable_ui(true);
+      setTimeout(function () { enable_ui(true); }, 10);
     };
-    
+
     if (overlay.par_mode == OVR_PAR_RACES) {
       var races = ["E", "H", "D", "O"];
       for (var i=0; i<races.length; i++)
@@ -675,7 +673,7 @@ function draw_gauss_h(filter) {
   gl.uniform1i(shaders.gauss_h.sampler_pids, 3);
 
   gl.uniform1f(shaders.gauss_h.filter, filter);
-  
+
   var more = true, idx = 0;
   while (more) {
     var fb = fbs.next_fb();
@@ -685,7 +683,7 @@ function draw_gauss_h(filter) {
     draw_overlay_main(fb, shaders.gauss_h, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
     idx += KERNEL_UNIFORM_SIZE;
   }
-  
+
   fbs.idx.g_h = fbs.idx.g;
 }
 
@@ -695,9 +693,9 @@ function draw_gauss_v(filter, compare) {
 
   textures.bind_g_sampler(shaders.gauss_v.sampler_gauss_h, fbs.idx.g_h);
   textures.bind_g_sampler(shaders.gauss_v.sampler_comp, fbs.find_dummy_idx(fbs.idx.g_v));
-  
+
   gl.uniform1f(shaders.gauss_v.filter, filter);
-  
+
   var more = true, idx = 0;
   while (more) {
     var fb = fbs.next_fb();
@@ -708,15 +706,15 @@ function draw_gauss_v(filter, compare) {
     draw_overlay_main(fb, shaders.gauss_v, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
     idx += KERNEL_UNIFORM_SIZE;
   }
-  
+
   fbs.idx.g_v = fbs.idx.g;
 }
 
 function draw_max_h() {
   gl.useProgram(shaders.max_h);
-  
+
   textures.bind_g_sampler(shaders.max_h.sampler, fbs.idx.g_v);
-  
+
   draw_overlay_main(fbs.max_h, shaders.max_h, buffers.max_h_pos, MAP_WIDTH / 10, MAP_WIDTH);
 }
 
@@ -726,9 +724,9 @@ function draw_max_v() {
   gl.activeTexture(gl.TEXTURE4);
   gl.bindTexture(gl.TEXTURE_2D, textures.max_h);
   gl.uniform1i(shaders.max_v.sampler, 4);
-  
+
   draw_overlay_main(fbs.max_v, shaders.max_v, buffers.max_v_pos, MAP_WIDTH / 10, MAP_WIDTH / 10);
-  
+
   var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
   gl.readPixels(0, 0, MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
   var max_val = 0;
@@ -748,13 +746,15 @@ function draw_heat(max_value) {
   textures.bind_g_sampler(shaders.heat.sampler, fbs.idx.g_v);
   gl.uniform1f(shaders.heat.max_value, max_value);
   gl.uniform1f(shaders.heat.gamma, overlay.gamma);
-  
+
   draw_overlay_main(fbs.overlay_out, shaders.heat, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
 }
 
 function draw_partition() {
   gl.useProgram(shaders.partition);
-  
+  mat4.identity(mv_mat);
+  mat4.translate(mv_mat, [0.0, 0.0, -4.0]);
+
   textures.bind_g_sampler(shaders.partition.sampler, fbs.idx.g_v);
   for (var i=0; i<PAR_COLORS.length; i++) {
     var c = PAR_COLORS[i];
@@ -762,7 +762,7 @@ function draw_partition() {
   }
   gl.uniform1f(shaders.partition.sel_par, map_state.sel_par / 255);
   gl.uniform1i(shaders.partition.races_mode, overlay.par_mode == OVR_PAR_RACES);
-  
+
   draw_overlay_main(fbs.overlay_out, shaders.partition, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
 }
 
@@ -771,6 +771,7 @@ function draw_partition() {
 function draw_overlay_main(fb, shader, vtx_buffer, width, height) {
   mat4.ortho(0, width, 0, height, 0, 10, p_mat);
   gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.viewport(0, 0, width, height);
   gl.disable(gl.BLEND);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.uniformMatrix4fv(shader.mv_mat, false, mv_mat);
@@ -814,11 +815,13 @@ function map_mousemove(event) {
   map_state.sel_cap = null;
   var old_sel_par = map_state.sel_par;
   map_state.sel_par = 0;
+
   var off = $("#map").offset();
   map_state.mx = parseInt(event.pageX - off.left);
   map_state.my = MAP_WIDTH - parseInt(event.pageY - off.top);
   map_state.illy_x = map_state.mx * 2 - MAP_WIDTH;
   map_state.illy_y = map_state.my * 2 - MAP_WIDTH;
+
   var illyx = map_state.illy_x.toString(), illyy = map_state.illy_y.toString();
   while (illyx.length < 4) illyx = " " + illyx;
   while (illyy.length < 4) illyy = " " + illyy;
@@ -826,82 +829,87 @@ function map_mousemove(event) {
   illyy = illyy.replace(/ /g, "&nbsp;");
   $("#pos_info").html("[" + illyx + ":" + illyy + "]");
   $("#pos_info").show();
+
   if (!map_state.ui_enabled) return;
+
   if ($("#show_capitals").is(':checked'))
     for (var i=0; i<capitals.length; i++) {
-        var town = capitals[i];
-        var r = Math.floor(Math.sqrt(town.p / 300));
-        if (r < 2) r = 2;
-        var dist = Math.sqrt(Math.pow(town.x1 - map_state.mx, 2) + Math.pow(town.y1 - map_state.my, 2));
-        if (dist <= r) {
-          map_state.sel_cap = town;
-          break;
-        }
+      var town = capitals[i];
+      var r = Math.floor(Math.sqrt(town.p / 300));
+      if (r < 2) r = 2;
+      var dist = Math.sqrt(Math.pow(town.x1 - map_state.mx, 2) + Math.pow(town.y1 - map_state.my, 2));
+      if (dist <= r) {
+        map_state.sel_cap = town;
+        break;
+      }
     }
   if (overlay.mode == OVR_PAR && overlay.par_data) {
     var idx = 4 * (map_state.my * MAP_WIDTH + map_state.mx) + 1;
     map_state.sel_par = overlay.par_data[idx];
   }
-  if (map_state.sel_cap != old_sel_cap || map_state.sel_par != old_sel_par) {
-    if (!map_state.sel_cap && !map_state.sel_par)
-      $("#infobox").hide();
-    else if (map_state.sel_cap) {
-      $("#infobox").html("<i>" + map_state.sel_cap.name + "</i><br />" +
-        "capital of <strong>" + map_state.sel_cap.alliance.name + "</strong><br />" +
-        "population: " + add_commas(map_state.sel_cap.p));
-      var pos = $("#map").position();
-      $("#infobox").css({
-          position: "absolute",
-          top: (pos.top + MAP_WIDTH - town.y1 - 60) + "px",
-          left: (pos.left + town.x1 + 15) + "px"
-      }).show();
-    }
-    else if (map_state.sel_par) {
-      var message, dy = 20;
-      if (overlay.par_mode == OVR_PAR_RACES)
-        message = "<span class=\"hint_label\">race:</span> <strong>" + get_race_name(map_state.sel_par) + "</strong>";
-      else if (overlay.par_mode == OVR_PAR_ALLIANCES) {
-        dy = 120;
-        message = "<span class=\"hint_label\">alliance:</span> <strong>";
-        var a = data.alliances[map_state.sel_par - 1];
-        message += a.name + "</strong> (ticker: <strong>" + a.tck + "</strong>)";
-        message += "<br /><span class=\"hint_label\">founded:</span> " + a.date;
-        message += "<br /><span class=\"hint_label\">population:</span> " + add_commas(a.p) + " (" + a.m + " members)" + "<br />";
-        if (a.conf.length > 0) {
-          message += "<br /><span class=\"hint_label\">confeds:</span> <span style=\"color:#99FF99;font-weight:bold\">";
-          for (var i=0; i<a.conf.length; i++)
-            message += (i ? ", ": "") + a.conf[i].tck;
-          message += "</span>";
-        }
-        if (a.NAP.length > 0) {
-          message += "<br /><span class=\"hint_label\">NAPs:</span> ";
-          for (var i=0; i<a.NAP.length; i++)
-            message += (i ? ", ": "") + a.NAP[i].tck;
-        }
-        if (a.war.length > 0) {
-          message += "<br /><span class=\"hint_label\">wars:</span> <span style=\"color:#FF3333;font-weight:bold\">";
-          for (var i=0; i<a.war.length; i++)
-            message += (i ? ", ": "") + a.war[i].name + " (" + a.war[i].tck + ")";
-          message += "</span>";
-        }
-      }
-      $("#infobox").html(message);
-      var pos = $("#map").position();
-      $("#infobox").css({
-          position: "absolute",
-          top: (pos.top + MAP_WIDTH - map_state.my - dy) + "px",
-          left: (pos.left + map_state.mx + 15) + "px"
-      }).show();
-    }
-    if (map_state.sel_par != old_sel_par)
-      draw_partition();
-    draw();
+
+  if (map_state.sel_cap == old_sel_cap && map_state.sel_par == old_sel_par) return;
+
+  if (!map_state.sel_cap && !map_state.sel_par)
+    $("#infobox").hide();
+  else if (map_state.sel_cap) {
+    $("#infobox").html("<i>" + map_state.sel_cap.name + "</i><br />" +
+      "capital of <strong>" + map_state.sel_cap.alliance.name + "</strong><br />" +
+      "population: " + add_commas(map_state.sel_cap.p));
+    var pos = $("#map").position();
+    $("#infobox").css({
+        position: "absolute",
+        top: (pos.top + MAP_WIDTH - town.y1 - 60) + "px",
+        left: (pos.left + town.x1 + 15) + "px"
+    }).show();
   }
+  else if (map_state.sel_par) {
+    var message, dy = 20;
+    if (overlay.par_mode == OVR_PAR_RACES)
+      message = "<span class=\"hint_label\">race:</span> <strong>" + get_race_name(map_state.sel_par) + "</strong>";
+    else if (overlay.par_mode == OVR_PAR_ALLIANCES) {
+      dy = 120;
+      message = "<span class=\"hint_label\">alliance:</span> <strong>";
+      var a = data.alliances[map_state.sel_par - 1];
+      message += a.name + "</strong> (ticker: <strong>" + a.tck + "</strong>)";
+      message += "<br /><span class=\"hint_label\">founded:</span> " + a.date;
+      message += "<br /><span class=\"hint_label\">population:</span> " + add_commas(a.p) + " (" + a.m + " members)" + "<br />";
+      if (a.conf.length > 0) {
+        message += "<br /><span class=\"hint_label\">confeds:</span> <span style=\"color:#99FF99;font-weight:bold\">";
+        for (var i=0; i<a.conf.length; i++)
+          message += (i ? ", ": "") + a.conf[i].tck;
+        message += "</span>";
+      }
+      if (a.NAP.length > 0) {
+        message += "<br /><span class=\"hint_label\">NAPs:</span> ";
+        for (var i=0; i<a.NAP.length; i++)
+          message += (i ? ", ": "") + a.NAP[i].tck;
+      }
+      if (a.war.length > 0) {
+        message += "<br /><span class=\"hint_label\">wars:</span> <span style=\"color:#FF3333;font-weight:bold\">";
+        for (var i=0; i<a.war.length; i++)
+          message += (i ? ", ": "") + a.war[i].name + " (" + a.war[i].tck + ")";
+        message += "</span>";
+      }
+    }
+    $("#infobox").html(message);
+    var pos = $("#map").position();
+    $("#infobox").css({
+        position: "absolute",
+        top: (pos.top + MAP_WIDTH - map_state.my - dy) + "px",
+        left: (pos.left + map_state.mx + 15) + "px"
+    }).show();
+  }
+
+  if (map_state.sel_par != old_sel_par)
+    draw_partition();
+  draw();
 }
 
 function map_mouseout(event) {
   $("#pos_info").hide();
-  $("#infobox").hide();
+  if (map_state.ui_enabled)
+    $("#infobox").hide();
   if (map_state.sel_par > 0) {
     map_state.sel_par = 0;
     if (map_state.ui_enabled) {
