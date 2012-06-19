@@ -16,7 +16,7 @@ var PAR_COLORS = [
   [0xFF, 0xA5, 0x00],/*orange*/    [0x00, 0x80, 0x00],/*green*/  [0x80, 0x80, 0x00],/*olive*/
   [0x00, 0x00, 0xA0],/*darkblue*/  [0xA5, 0x2A, 0x2A],/*brown*/  [0x80, 0x00, 0x80],/*purple*/
   [0xAD, 0xD8, 0xE6],/*lightblue*/ [0x80, 0x00, 0x00],/*maroon*/ [0xC0, 0xC0, 0xC0] /*silver*/];
-var KERNEL_UNIFORM_SIZE = 300;
+var KERNEL_UNIFORM_SIZE = 10;
 
 var data = { server: "", date: "", alliances: [], towns: [] }; // data loaded from the json file, generated based on the Illy-supplied xmls
 
@@ -26,7 +26,8 @@ var map_state = {
   mx: 0,           // mousex
   my: 0,           // mousey
   sel_cap: null,   // selected (mouse over) alliance capital
-  sel_par: 0       // selected (mouse over) partition index
+  sel_par: 0,      // selected (mouse over) partition index
+  ui_enabled: true
 };
 
 var overlay = {
@@ -35,44 +36,80 @@ var overlay = {
   mode: OVR_NONE,
   race: 0,
   par_mode: "",
-  kernels: [],     // precomputed gaussian distributions of form { std_dev: val, buffer: Float32Array }
+  kernels: [],
   par_data: null
 }
 
 var gl;
 var shaders = {
   main: null,
-  gauss: null,
-  part: null
+  overlay: null,
+  stars: null,
+  gauss_h: null,
+  gauss_v: null,
+  max_h: null,
+  max_v: null,
+  heat: null,
+  partition: null
 }
-var mvMatrix = mat4.create(), pMatrix = mat4.create();
+var mv_mat = mat4.create(), p_mat = mat4.create();
+
 var buffers = {
-  mapPos: null,
-  maxPos: null,
-  partIdxPos: null,
-  partTempPos: null,
-  texPos: null,
-  starsPos: null,
-  starsTexPos: null,
-  selStarPos: null,
-  selStarTexPos: null
+  map_pos: null,
+  max_h_pos: null,
+  max_v_pos: null,
+  tex_pos: null,
+  stars_pos: null,
+  stars_tex_pos: null,
+  sel_star_pos: null,
+  sel_star_tex_pos: null
 };
 var textures = {
-  bg_map: null,
-  star: null,
-  towns: null,
-  overlay_max: null,
-  overlay_temp1: null,
-  overlay_temp2: null,
-  overlay_temp3: null,
-  overlay_out: null
+  bg_map: null,     // TEXTURE0 1000x1000 byte  rgba (picture)
+  star: null,       // TEXTURE1 512 x 512 byte  rgba (picture)
+  towns: null,      // TEXTURE2 1000x1000 float rgba (4vals / sample)
+  pids: null,       // TEXTURE3 1000x1000 byte  rgba (4pids / sample)
+  max_h: null,      // TEXTURE4 100 x1000 byte  rgba (16bit.16bit fixed point encoding)
+  max_v: null,      //          100 x 100 byte  rgba (16bit.16bit fixed point encoding)
+  overlay_out: null,// TEXTURE5 1000x1000 byte  rgba
+  gauss: [ null, null, null, null ],
+                    // TEXTURE6-9
+                    // 1000x1000 float rgb  (r and g used)
+  bind_g_sampler: function(sampler, i) {
+    if (i == 0) gl.activeTexture(gl.TEXTURE6);
+    else if (i == 1) gl.activeTexture(gl.TEXTURE7);
+    else if (i == 2) gl.activeTexture(gl.TEXTURE8);
+    else if (i == 3) gl.activeTexture(gl.TEXTURE9);
+    gl.bindTexture(gl.TEXTURE_2D, this.gauss[i]);
+    gl.uniform1i(sampler, i + 6);
+  }
 }
 var fbs = {
-  overlay_max: null,   // 100x100
-  overlay_temp1: null, // 1000x1000
-  overlay_temp2: null, // 1000x1000
-  overlay_temp3: null, // 1000x1000
-  overlay_out: null    // 1000x1000
+  max_h: null,
+  max_v: null,
+  overlay_out: null,
+  gauss: [ null, null, null, null ],
+  idx: {
+    g: -1,
+    g_prev: -1,
+    g_h: -1,
+    g_v: -1
+  },
+  next_fb: function() {
+    for (var i=0; i<this.gauss.length; i++)
+      if ([this.idx.g, this.idx.g_h, this.idx.g_v].indexOf(i) == -1) {
+        this.idx.g_prev = this.idx.g;
+        this.idx.g = i;
+        break;
+      }
+    return this.gauss[this.idx.g];
+  },
+  find_dummy_idx: function(j) {
+    if (j >= 0) return j;
+    for (var i=0; i<this.gauss.length; i++)
+      if ([this.idx.g, this.idx.g_h, this.idx.g_v, this.idx.g_prev].indexOf(i) == -1)
+        return i;
+  }
 }
 
 
@@ -171,7 +208,7 @@ function init_kernels() {
   $("#std_dev option").each(function() {
     var kernel = { std_dev: $(this).val() };
     var half = 3 * kernel.std_dev; // 3*sigma coverage => less then 1% loss
-    kernel.buffer = new Float32Array(new ArrayBuffer(4 * (1 + 2 * half)));
+    kernel.buffer = new Float32Array(1 + 2 * half);
     var factor1 = 2 * Math.pow(kernel.std_dev, 2), factor2 = kernel.std_dev * Math.sqrt(2 * Math.PI);
     for (var x=0; x<kernel.buffer.length; x++)
       kernel.buffer[x] = Math.exp(-Math.pow(x-half, 2) / factor1) / factor2;
@@ -180,20 +217,22 @@ function init_kernels() {
 }
 
 function init_webgl() {
-  var canvas = $("#map")[0], err = "";
+  var canvas = $("#map")[0], ext = null, err = "";
   try {
-    gl = canvas.getContext("experimental-webgl", { preserveDrawingBuffer: true });
-    gl.viewportWidth = canvas.width;
-    gl.viewportHeight = canvas.height;
+    gl = canvas.getContext("experimental-webgl"/*, { preserveDrawingBuffer: true }*/);
+    if (gl) ext = gl.getExtension("OES_texture_float");
   }
   catch (e) {
     err = "\n" + e;
   }
-  if (!gl) {
+  if (!gl || !ext) {
+    if (gl && !ext && err == "") err = "\nOES_texture_float not supported";
     alert("Could not initialise WebGL, sorry :-(" + err);
     return false;
   }
   else {
+    gl.viewportWidth = canvas.width;
+    gl.viewportHeight = canvas.height;
     if (!init_shaders()) return false;
     init_static_buffers();
     textures.bg_map = gl.createTexture();
@@ -207,37 +246,72 @@ function init_webgl() {
 }
 
 function init_shaders() {
-  shaders.main = create_program("main_shader-fs", "main_shader-vs");
+  shaders.main = create_program("main-fs", "main-vs");
   if (!shaders.main) return false;
-  shaders.main.uMapSampler = gl.getUniformLocation(shaders.main, "uMapSampler");
-  shaders.main.uOverlaySampler = gl.getUniformLocation(shaders.main, "uOverlaySampler");
-  shaders.main.uStarSampler = gl.getUniformLocation(shaders.main, "uStarSampler");
-  shaders.main.uTownsSampler = gl.getUniformLocation(shaders.main, "uTownsSampler");
-  shaders.main.uShowBg = gl.getUniformLocation(shaders.main, "uShowBg");
-  shaders.main.uGreyBg = gl.getUniformLocation(shaders.main, "uGreyBg");
-  shaders.main.uShowTowns = gl.getUniformLocation(shaders.main, "uShowTowns");
-  shaders.main.uShowOverlay = gl.getUniformLocation(shaders.main, "uShowOverlay");
-  shaders.main.uStarColor = gl.getUniformLocation(shaders.main, "uStarColor");
-  shaders.main.uStars = gl.getUniformLocation(shaders.main, "uStars");
-  shaders.gauss = create_program("gauss-fs", "main_shader-vs");
-  if (!shaders.gauss) return false;
-  shaders.gauss.uTownsSampler = gl.getUniformLocation(shaders.gauss, "uTownsSampler");
-  shaders.gauss.uOvr0Sampler = gl.getUniformLocation(shaders.gauss, "uOvr0Sampler");
-  shaders.gauss.uOvr1Sampler = gl.getUniformLocation(shaders.gauss, "uOvr1Sampler");
-  shaders.gauss.uOvr2Sampler = gl.getUniformLocation(shaders.gauss, "uOvr2Sampler");
-  shaders.gauss.uKernel = [];
+  shaders.main.sampler_bg = gl.getUniformLocation(shaders.main, "sampler_bg");
+  shaders.main.sampler_towns = gl.getUniformLocation(shaders.main, "sampler_towns");
+  shaders.main.show_bg = gl.getUniformLocation(shaders.main, "show_bg");
+  shaders.main.grey_bg = gl.getUniformLocation(shaders.main, "grey_bg");
+  shaders.main.show_towns = gl.getUniformLocation(shaders.main, "show_towns");
+  
+  shaders.overlay = create_program("overlay-fs", "main-vs");
+  if (!shaders.overlay) return false;
+  shaders.overlay.sampler = gl.getUniformLocation(shaders.overlay, "sampler");
+  
+  shaders.stars = create_program("stars-fs", "main-vs");
+  if (!shaders.stars) return false;
+  shaders.stars.sampler = gl.getUniformLocation(shaders.stars, "sampler");
+  shaders.stars.color = gl.getUniformLocation(shaders.stars, "color");
+  
+  shaders.gauss_h = create_program("gauss_h-fs", "main-vs");
+  if (!shaders.gauss_h) return false;
+  shaders.gauss_h.sampler_towns = gl.getUniformLocation(shaders.gauss_h, "sampler_towns");
+  shaders.gauss_h.sampler_pids = gl.getUniformLocation(shaders.gauss_h, "sampler_pids");
+  shaders.gauss_h.sampler_prev = gl.getUniformLocation(shaders.gauss_h, "sampler_prev");
+  shaders.gauss_h.use_sampler_prev = gl.getUniformLocation(shaders.gauss_h, "use_sampler_prev");
+  shaders.gauss_h.kernel = [];
   for (var i=0; i<KERNEL_UNIFORM_SIZE; i++)
-    shaders.gauss.uKernel.push(gl.getUniformLocation(shaders.gauss, "uKernel[" + i + "]"));
-  shaders.gauss.uKernelSize = gl.getUniformLocation(shaders.gauss, "uKernelSize");
-  shaders.gauss.uFilter = gl.getUniformLocation(shaders.gauss, "uFilter");
-  shaders.gauss.uSelPar = gl.getUniformLocation(shaders.gauss, "uSelPar");
-  shaders.gauss.uActiveSampler = gl.getUniformLocation(shaders.gauss, "uActiveSampler");
-  shaders.gauss.uPass = gl.getUniformLocation(shaders.gauss, "uPass");
-  shaders.gauss.uMaxValue = gl.getUniformLocation(shaders.gauss, "uMaxValue");
-  shaders.gauss.uGamma = gl.getUniformLocation(shaders.gauss, "uGamma");
-  shaders.gauss.uColors = [];
+    shaders.gauss_h.kernel.push(gl.getUniformLocation(shaders.gauss_h, "kernel[" + i + "]"));
+  shaders.gauss_h.start_index = gl.getUniformLocation(shaders.gauss_h, "start_index");
+  shaders.gauss_h.end_index = gl.getUniformLocation(shaders.gauss_h, "end_index");
+  shaders.gauss_h.filter = gl.getUniformLocation(shaders.gauss_h, "filter");
+
+  shaders.gauss_v = create_program("gauss_v-fs", "main-vs");
+  if (!shaders.gauss_v) return false;
+  shaders.gauss_v.sampler_gauss_h = gl.getUniformLocation(shaders.gauss_v, "sampler_gauss_h");
+  shaders.gauss_v.sampler_comp = gl.getUniformLocation(shaders.gauss_v, "sampler_comp");
+  shaders.gauss_v.sampler_prev = gl.getUniformLocation(shaders.gauss_v, "sampler_prev");
+  shaders.gauss_v.use_sampler_prev = gl.getUniformLocation(shaders.gauss_v, "use_sampler_prev");
+  shaders.gauss_v.kernel = [];
+  for (var i=0; i<KERNEL_UNIFORM_SIZE; i++)
+    shaders.gauss_v.kernel.push(gl.getUniformLocation(shaders.gauss_v, "kernel[" + i + "]"));
+  shaders.gauss_v.start_index = gl.getUniformLocation(shaders.gauss_v, "start_index");
+  shaders.gauss_v.end_index = gl.getUniformLocation(shaders.gauss_v, "end_index");
+  shaders.gauss_v.filter = gl.getUniformLocation(shaders.gauss_v, "filter");
+  shaders.gauss_v.compare = gl.getUniformLocation(shaders.gauss_v, "compare");
+  
+  shaders.max_h = create_program("max_h-fs", "main-vs");
+  if (!shaders.max_h) return false;
+  shaders.max_h.sampler = gl.getUniformLocation(shaders.max_h, "sampler");
+  
+  shaders.max_v = create_program("max_v-fs", "main-vs");
+  if (!shaders.max_v) return false;
+  shaders.max_v.sampler = gl.getUniformLocation(shaders.max_v, "sampler");
+  
+  shaders.heat = create_program("heat-fs", "main-vs");
+  if (!shaders.heat) return false;
+  shaders.heat.sampler = gl.getUniformLocation(shaders.heat, "sampler");
+  shaders.heat.max_value = gl.getUniformLocation(shaders.heat, "max_value");
+  shaders.heat.gamma = gl.getUniformLocation(shaders.heat, "gamma");
+  
+  shaders.partition = create_program("partition-fs", "main-vs");
+  if (!shaders.partition) return false;
+  shaders.partition.races_mode = gl.getUniformLocation(shaders.partition, "races_mode");
+  shaders.partition.sampler = gl.getUniformLocation(shaders.partition, "sampler");
+  shaders.partition.sel_par = gl.getUniformLocation(shaders.partition, "sel_par");
+  shaders.partition.par_colors = [];
   for (var i=0; i<PAR_COLORS.length; i++)
-    shaders.gauss.uColors.push(gl.getUniformLocation(shaders.gauss, "uColors[" + i + "]"));
+    shaders.partition.par_colors.push(gl.getUniformLocation(shaders.partition, "par_colors[" + i + "]"));
   return true;
 }
 
@@ -249,50 +323,36 @@ function create_program(vs_script_id, fs_script_id) {
   gl.attachShader(program, fragment_shader);
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    alert("Could not initialise shaders.");
+    alert("Could not link program (shaders: " + vs_script_id + ", " + fs_script_id + ").\n\nInfoLog: " + gl.getProgramInfoLog(program));
     return null;
   }
-  program.aVertexPosition = gl.getAttribLocation(program, "aVertexPosition");
-  gl.enableVertexAttribArray(program.aVertexPosition);
-  program.aTextureCoord = gl.getAttribLocation(program, "aTextureCoord");
-  gl.enableVertexAttribArray(program.aTextureCoord);
-  program.uPMatrix = gl.getUniformLocation(program, "uPMatrix");
-  program.uMVMatrix = gl.getUniformLocation(program, "uMVMatrix");
+  program.a_vtx_pos = gl.getAttribLocation(program, "a_vtx_pos");
+  gl.enableVertexAttribArray(program.a_vtx_pos);
+  program.a_tex_pos = gl.getAttribLocation(program, "a_tex_pos");
+  gl.enableVertexAttribArray(program.a_tex_pos);
+  program.p_mat = gl.getUniformLocation(program, "p_mat");
+  program.mv_mat = gl.getUniformLocation(program, "mv_mat");
   return program;
 }
 
-function attach_tex_to_fb(width, height) {
-  var tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-  return tex;
-}
-
 function init_overlay_fb_tex() {
-  fbs.overlay_max = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_max);
-  textures.overlay_max = attach_tex_to_fb(MAP_WIDTH / 10, MAP_WIDTH / 10);
+  for (var i=0; i<fbs.gauss.length; i++) {
+    fbs.gauss[i] = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.gauss[i]);
+    textures.gauss[i] = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH, gl.RGB, gl.FLOAT);
+  }
+  
+  fbs.max_h = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.max_h);
+  textures.max_h = attach_tex_to_fb(MAP_WIDTH / 10, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE);
 
-  fbs.overlay_temp1 = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp1);
-  textures.overlay_temp1 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
-
-  fbs.overlay_temp2 = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp2);
-  textures.overlay_temp2 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
-
-  fbs.overlay_temp3 = gl.createFramebuffer();
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_temp3);
-  textures.overlay_temp3 = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
-
+  fbs.max_v = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.max_v);
+  textures.max_v = attach_tex_to_fb(MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE);
+  
   fbs.overlay_out = gl.createFramebuffer();
   gl.bindFramebuffer(gl.FRAMEBUFFER, fbs.overlay_out);
-  textures.overlay_out = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH);
+  textures.overlay_out = attach_tex_to_fb(MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE);
 
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.bindTexture(gl.TEXTURE_2D, null);
@@ -314,11 +374,12 @@ function init_static_buffers() {
     return buffer;
   };
 
-  buffers.mapPos = create_quad(MAP_WIDTH, MAP_WIDTH);
-  buffers.maxPos = create_quad(MAP_WIDTH / 10, MAP_WIDTH / 10);
+  buffers.map_pos = create_quad(MAP_WIDTH, MAP_WIDTH);
+  buffers.max_h_pos = create_quad(MAP_WIDTH / 10, MAP_WIDTH);
+  buffers.max_v_pos = create_quad(MAP_WIDTH / 10, MAP_WIDTH / 10);
 
-  buffers.texPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
+  buffers.tex_pos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex_pos);
   var textureCoords = [
       0.0, 0.0,
       1.0, 0.0,
@@ -326,16 +387,8 @@ function init_static_buffers() {
       1.0, 1.0
   ];
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
-  buffers.texPos.itemSize = 2;
-  buffers.texPos.numItems = 4;
-}
-
-function get_town_pos(town, is_selected) {
-  var r = Math.floor(Math.sqrt(town.p / 100));
-  if (is_selected) r *= 1.2;
-  if (r < 4) r = 4;
-  var x = town.x1 - r, y = town.y1 - r;
-  return { x: x, y: y, scale: 2 * r }
+  buffers.tex_pos.itemSize = 2;
+  buffers.tex_pos.numItems = 4;
 }
 
 function init_data_buffers() {
@@ -348,8 +401,8 @@ function init_data_buffers() {
        1.0, 1.0, 0.0
   ];
 
-  buffers.starsPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsPos);
+  buffers.stars_pos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.stars_pos);
   var vertices = [];
   for (var i=0; i<capitals.length; i++) {
     var pos = get_town_pos(capitals[i], false);
@@ -360,8 +413,8 @@ function init_data_buffers() {
     }
   }
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
-  buffers.starsPos.itemSize = 3;
-  buffers.starsPos.numItems = capitals.length * 6;
+  buffers.stars_pos.itemSize = 3;
+  buffers.stars_pos.numItems = capitals.length * 6;
 
   var tex_pos = [
       0.0, 0.0,
@@ -371,46 +424,57 @@ function init_data_buffers() {
       0.0, 1.0,
       1.0, 1.0
   ];
-  buffers.starsTexPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
+  buffers.stars_tex_pos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.stars_tex_pos);
   var textureCoords = [];
   for (var i=0; i<capitals.length; i++)
     for (var j=0; j<tex_pos.length; j++)
       textureCoords.push(tex_pos[j]);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(textureCoords), gl.STATIC_DRAW);
-  buffers.starsTexPos.itemSize = 2;
-  buffers.starsTexPos.numItems = capitals.length * 6;
+  buffers.stars_tex_pos.itemSize = 2;
+  buffers.stars_tex_pos.numItems = capitals.length * 6;
 
-  buffers.selStarPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarPos);
+  buffers.sel_star_pos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.sel_star_pos);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vtx_pos), gl.STATIC_DRAW);
-  buffers.selStarPos.itemSize = 3;
-  buffers.selStarPos.numItems = 6;
+  buffers.sel_star_pos.itemSize = 3;
+  buffers.sel_star_pos.numItems = 6;
 
-  buffers.selStarTexPos = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.selStarTexPos);
+  buffers.sel_star_tex_pos = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.sel_star_tex_pos);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(tex_pos), gl.STATIC_DRAW);
-  buffers.selStarTexPos.itemSize = 2;
-  buffers.selStarTexPos.numItems = 6;
+  buffers.sel_star_tex_pos.itemSize = 2;
+  buffers.sel_star_tex_pos.numItems = 6;
 }
 
 function init_towns_tex(mode) {
-  if (textures.towns && textures.towns.mode == mode) return;
-  var buffer = new Uint8Array(new ArrayBuffer(MAP_WIDTH * MAP_WIDTH * 16));
+  if (textures.pids && textures.pids.mode == mode) return;
+  var towns_buffer = null, pids_buffer = new Uint8Array(MAP_WIDTH * MAP_WIDTH * 4);
+  if (!textures.towns) towns_buffer = new Float32Array(MAP_WIDTH * MAP_WIDTH * 4);
   for (var i=0; i<data.towns.length; i++) {
     var town = data.towns[i];
-    var idx = (town.x + MAP_WIDTH + ((town.y + MAP_WIDTH) * MAP_WIDTH * 2)) * 4;
-    var half = float2half(town.p);
-    buffer[idx] = half[0];
-    buffer[idx + 1] = half[1];
-    buffer[idx + 2] = (town.alliance ? town.alliance.index : 0);
-    buffer[idx + 3] = get_race_code(town.r);
+    var x = Math.floor((town.x + MAP_WIDTH) / 2), y = Math.floor((town.y + MAP_WIDTH) / 2);
+    var idx = 4 * (y * MAP_WIDTH + x);
+    if ((town.x + MAP_WIDTH) % 2) idx++;
+    if ((town.y + MAP_WIDTH) % 2) idx+=2;
+    if (towns_buffer) towns_buffer[idx] = town.p;
+    pids_buffer[idx] = (mode == 0 ? get_race_code(town.r) : (town.alliance ? town.alliance.index : 0));
   }
-  if (!textures.towns) textures.towns = gl.createTexture();
-  textures.towns.mode = mode;
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  if (!textures.towns) {
+    textures.towns = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, MAP_WIDTH, MAP_WIDTH, 0, gl.RGBA, gl.FLOAT, towns_buffer);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  if (!textures.pids) textures.pids = gl.createTexture();
+  textures.pids.mode = mode;
+  gl.bindTexture(gl.TEXTURE_2D, textures.pids);
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 2 * MAP_WIDTH, 2 * MAP_WIDTH, 0, gl.RGBA, gl.UNSIGNED_BYTE, buffer);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, MAP_WIDTH, MAP_WIDTH, 0, gl.RGBA, gl.UNSIGNED_BYTE, pids_buffer);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -424,205 +488,104 @@ function init_towns_tex(mode) {
 
 
 
-// draw ************************************************************************
+// draw main ************************************************************************
 
 function draw() {
   var v_map = $("#show_map").is(':checked');
   var v_tow = $("#show_towns").is(':checked');
   var v_cap = $("#show_capitals").is(':checked');
-
-  gl.useProgram(shaders.main);
+  
+  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, p_mat);
+  mat4.identity(mv_mat);
+  mat4.translate(mv_mat, [0.0, 0.0, -5.0]);
+  
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
   gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   //gl.disable(gl.DEPTH_TEST);
-
-  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
-  gl.uniformMatrix4fv(shaders.main.uPMatrix, false, pMatrix);
-
-  // draw background map and/or overlay
-
-  gl.activeTexture(gl.TEXTURE2);
-  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
-  gl.uniform1i(shaders.main.uTownsSampler, 2);
-
-  gl.uniform1i(shaders.main.uShowBg, v_map);
-  gl.uniform1i(shaders.main.uShowTowns, v_tow);
-  gl.uniform1i(shaders.main.uShowOverlay, overlay.mode != OVR_NONE);
-
-  if (v_map || v_tow || overlay.mode != OVR_NONE) {
-    mat4.identity(mvMatrix);
-    mat4.translate(mvMatrix, [0.0, 0.0, -5.0]);
-    if (overlay.mode != OVR_NONE) {
-      gl.activeTexture(gl.TEXTURE3);
-      gl.bindTexture(gl.TEXTURE_2D, textures.overlay_out);
-      gl.uniform1i(shaders.main.uOverlaySampler, 3);
-    }
-    draw_map(v_map, v_cap || v_tow || overlay.mode != OVR_NONE);
-  }
-
-  // draw capitals
-
+  
+  if (v_map || v_tow)
+    draw_map(v_map, v_tow, v_cap);
+    
+  if (overlay.mode != OVR_NONE)
+    draw_overlay();
+    
   if (v_cap) {
-    mat4.identity(mvMatrix);
-    draw_stars(buffers.starsPos, buffers.starsTexPos, { r: 232, g: 222, b: 49 });
+    gl.useProgram(shaders.stars);
+    gl.uniformMatrix4fv(shaders.stars.p_mat, false, p_mat);
+    mat4.translate(mv_mat, [0, 0, 1.0]);
+    draw_stars(buffers.stars_pos, buffers.stars_tex_pos, { r: 232, g: 222, b: 49 });
     if (map_state.sel_cap) {
       var pos = get_town_pos(map_state.sel_cap, true);
-      mat4.identity(mvMatrix);
-      mat4.translate(mvMatrix, [pos.x, pos.y, -1.0]);
-      mat4.scale(mvMatrix, [pos.scale, pos.scale, 1.0]);
-      draw_stars(buffers.selStarPos, buffers.selStarTexPos, { r: 0, g: 255, b: 0 });
+      mat4.translate(mv_mat, [pos.x, pos.y, 1.0]);
+      mat4.scale(mv_mat, [pos.scale, pos.scale, 1.0]);
+      draw_stars(buffers.sel_star_pos, buffers.sel_star_tex_pos, { r: 0, g: 255, b: 0 });
     }
   }
 }
 
-function draw_overlay_init() {
-  gl.useProgram(shaders.gauss);
-  gl.disable(gl.BLEND);
+function draw_map(v_map, v_tow, v_cap) {
+  gl.useProgram(shaders.main);
 
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, textures.bg_map);
+  gl.uniform1i(shaders.main.sampler_bg, 0);
   gl.activeTexture(gl.TEXTURE2);
   gl.bindTexture(gl.TEXTURE_2D, textures.towns);
-  gl.uniform1i(shaders.gauss.uTownsSampler, 2);
-  gl.activeTexture(gl.TEXTURE4);
-  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp1);
-  gl.uniform1i(shaders.gauss.uOvr0Sampler, 4);
-  gl.activeTexture(gl.TEXTURE5);
-  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp2);
-  gl.uniform1i(shaders.gauss.uOvr1Sampler, 5);
-  gl.activeTexture(gl.TEXTURE6);
-  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_temp3);
-  gl.uniform1i(shaders.gauss.uOvr2Sampler, 6);
+  gl.uniform1i(shaders.main.sampler_towns, 2);
 
-  mat4.identity(mvMatrix);
-  mat4.translate(mvMatrix, [0.0, 0.0, -4.0]);
-  gl.uniformMatrix4fv(shaders.gauss.uMVMatrix, false, mvMatrix);
-  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, pMatrix);
-  gl.uniformMatrix4fv(shaders.gauss.uPMatrix, false, pMatrix);
+  gl.uniform1i(shaders.main.show_bg, v_map);
+  gl.uniform1i(shaders.main.show_towns, v_tow);
+  gl.uniform1i(shaders.main.grey_bg, v_cap || v_tow || overlay.mode != OVR_NONE);
+  
+  gl.uniformMatrix4fv(shaders.main.mv_mat, false, mv_mat);
+  gl.uniformMatrix4fv(shaders.main.p_mat, false, p_mat);
+  
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex_pos);
+  gl.vertexAttribPointer(shaders.main.a_tex_pos, buffers.tex_pos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.map_pos);
+  gl.vertexAttribPointer(shaders.main.a_vtx_pos, buffers.map_pos.itemSize, gl.FLOAT, false, 0, 0);
 
-  gl.uniform1f(shaders.gauss.uGamma, overlay.gamma);
-
-  var kernel = null;
-  for (var i=0; i<overlay.kernels.length; i++)
-    if (overlay.kernels[i].std_dev == overlay.std_dev) {
-      kernel = overlay.kernels[i].buffer;
-      break;
-    }
-  gl.uniform1i(shaders.gauss.uKernelSize, kernel.length);
-  for (var i=0; i<kernel.length && i<KERNEL_UNIFORM_SIZE; i++)
-    gl.uniform1f(shaders.gauss.uKernel[i], kernel[i]);
-}
-
-function overlay_pass(pass, fb, get_max_pass) {
-  var vtx_buffer = (get_max_pass ? buffers.maxPos : buffers.mapPos);
-  gl.uniform1i(shaders.gauss.uPass, pass);
-  if (get_max_pass) gl.uniform1f(shaders.gauss.uMaxValue, 1.0);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
-  gl.vertexAttribPointer(shaders.gauss.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
-  gl.vertexAttribPointer(shaders.gauss.aTextureCoord, buffers.texPos.itemSize, gl.FLOAT, false, 0, 0);
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, vtx_buffer.numItems);
-  if (get_max_pass) {
-    var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
-    gl.readPixels(0, 0, MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-    var max_val = 0;
-    for (var i=0; i<pixels.length; i+=4) {
-      var val = half2float(pixels[i], pixels[i + 1]);
-      if (val > max_val)
-        max_val = val;
-    }
-    gl.uniform1f(shaders.gauss.uMaxValue, max_val);
-  }
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.map_pos.numItems);
 }
 
 function draw_overlay() {
-  draw_overlay_init();
-  gl.uniform2f(shaders.gauss.uFilter, 0, overlay.race / 255 );
-  gl.uniform1i(shaders.gauss.uActiveSampler, 0);
-  gl.uniform1f(shaders.gauss.uMaxValue, 0.0);
-  if (overlay.mode == OVR_POP) {
-    overlay_pass(0, fbs.overlay_temp1, false);
-    overlay_pass(1, fbs.overlay_temp2, false);
-    gl.uniform1i(shaders.gauss.uActiveSampler, 1);
-    overlay_pass(2, fbs.overlay_max, true);
-    overlay_pass(3, fbs.overlay_out, false);
-  }
-  else if (overlay.mode == OVR_PAR) {
-    for (var i=0; i<PAR_COLORS.length; i++) {
-      var c = PAR_COLORS[i];
-      gl.uniform3f(shaders.gauss.uColors[i], c[0] / 255, c[1] / 255, c[2] / 255);
-    }
-    var active_s = 0;
-    var part_pass = function(f0, f1) {
-      gl.uniform2f(shaders.gauss.uFilter, f0, f1);
-      overlay_pass(0, fbs.overlay_temp1, false);
-      overlay_pass(1, (active_s != 1 ? fbs.overlay_temp2 : fbs.overlay_temp3), false);
-      if (active_s != 1) active_s = 1;
-      else active_s = 2;
-      gl.uniform1i(shaders.gauss.uActiveSampler, active_s);
-    };
-    if (overlay.par_mode == OVR_PAR_RACES) {
-      var races = ["E", "H", "D", "O"];
-      for (var i=0; i<races.length; i++)
-        part_pass(0, get_race_code(races[i]) / 255);
-    }
-    else if (overlay.par_mode == OVR_PAR_ALLIANCES) {
-      for (var i=0; i<data.alliances.length; i++)
-        part_pass(data.alliances[i].index / 255, 0);
-    }
-    overlay.par_data = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH);
-    gl.readPixels(0, 0, MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE, overlay.par_data);
-    overlay_pass(2, fbs.overlay_max, true);
-    overlay_pass(4, fbs.overlay_out, false);
-  }
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  draw();
-}
+  gl.useProgram(shaders.overlay);
+  gl.enable(gl.BLEND);
 
-function draw_par_last() {
-  draw_overlay_init();
-  gl.uniform1f(shaders.gauss.uSelPar, map_state.sel_par / 255);
-  overlay_pass(4, fbs.overlay_out, false);
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-}
+  gl.activeTexture(gl.TEXTURE5);
+  gl.bindTexture(gl.TEXTURE_2D, textures.overlay_out);
+  gl.uniform1i(shaders.overlay.sampler, 5);
 
-function draw_map(v_map, grayed) {
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.texPos);
-  gl.vertexAttribPointer(shaders.main.aTextureCoord, buffers.texPos.itemSize, gl.FLOAT, false, 0, 0);
+  mat4.translate(mv_mat, [0, 0, 1.0]);
+  gl.uniformMatrix4fv(shaders.overlay.mv_mat, false, mv_mat);
+  gl.uniformMatrix4fv(shaders.overlay.p_mat, false, p_mat);
+  
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex_pos);
+  gl.vertexAttribPointer(shaders.overlay.a_tex_pos, buffers.tex_pos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.map_pos);
+  gl.vertexAttribPointer(shaders.overlay.a_vtx_pos, buffers.map_pos.itemSize, gl.FLOAT, false, 0, 0);
 
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.mapPos);
-  gl.vertexAttribPointer(shaders.main.aVertexPosition, buffers.mapPos.itemSize, gl.FLOAT, false, 0, 0);
-
-  if (v_map) {
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, textures.bg_map);
-    gl.uniform1i(shaders.main.uMapSampler, 0);
-  }
-
-  gl.uniformMatrix4fv(shaders.main.uMVMatrix, false, mvMatrix);
-  gl.uniform1i(shaders.main.uGreyBg, grayed);
-  gl.uniform1i(shaders.main.uStars, false);
-
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.mapPos.numItems);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, buffers.map_pos.numItems);
 }
 
 function draw_stars(vtx_buffer, tex_buffer, color) {
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.starsTexPos);
-  gl.vertexAttribPointer(shaders.main.aTextureCoord, buffers.starsTexPos.itemSize, gl.FLOAT, false, 0, 0);
-
-  gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
-  gl.vertexAttribPointer(shaders.main.aVertexPosition, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
-
+  gl.uniform3f(shaders.stars.color, color.r / 255, color.g / 255, color.b / 255);
+  gl.uniformMatrix4fv(shaders.stars.mv_mat, false, mv_mat);
+  
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+    
   gl.activeTexture(gl.TEXTURE1);
   gl.bindTexture(gl.TEXTURE_2D, textures.star);
+  gl.uniform1i(shaders.stars.sampler, 1);
 
-  gl.uniform1i(shaders.main.uStarSampler, 1);
-  gl.uniform1i(shaders.main.uStars, true);
-  gl.uniform3f(shaders.main.uStarColor, color.r / 255, color.g / 255, color.b / 255);
-  gl.uniformMatrix4fv(shaders.main.uMVMatrix, false, mvMatrix);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.stars_tex_pos);
+  gl.vertexAttribPointer(shaders.stars.a_tex_pos, buffers.stars_tex_pos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
+  gl.vertexAttribPointer(shaders.stars.a_vtx_pos, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
 
   gl.drawArrays(gl.TRIANGLES, 0, tex_buffer.numItems);
 }
@@ -632,7 +595,7 @@ function draw_stars(vtx_buffer, tex_buffer, color) {
 
 
 
-// control *********************************************************************
+// draw overlay ************************************************************************
 
 function recompute_overlay() {
   overlay.std_dev = parseInt($("#std_dev").val());
@@ -646,10 +609,205 @@ function recompute_overlay() {
     overlay.par_mode = overlay.mode.substring(OVR_PAR.length + 1);
     overlay.mode = OVR_PAR;
   }
-  init_towns_tex(0);
-  if (overlay.mode != OVR_NONE) draw_overlay();
+  init_towns_tex(overlay.mode == OVR_PAR && overlay.par_mode == OVR_PAR_ALLIANCES ? 1 : 0);
+  if (overlay.mode != OVR_NONE) {
+    enable_ui(false);
+    setTimeout('recompute_overlay_draw()', 50);
+  }
   else draw();
 }
+
+function recompute_overlay_draw() {
+  mat4.identity(mv_mat);
+  mat4.translate(mv_mat, [0.0, 0.0, -4.0]);
+  mat4.ortho(0, MAP_WIDTH, 0, MAP_WIDTH, 0, 10, p_mat);
+  
+  if (overlay.mode == OVR_POP) {
+    var filter = overlay.race / 255;
+    draw_gauss_h(filter);
+    draw_gauss_v(filter, false);
+    draw_max_h();
+    var max_value = draw_max_v();
+    draw_heat(max_value);
+    draw();
+    enable_ui(true);
+  }
+  else if (overlay.mode == OVR_PAR) {
+    var p_data = [], idx = 0;
+    var part_pass = function() {
+      draw_gauss_h(p_data[idx]);
+      draw_gauss_v(p_data[idx], idx > 0);
+      idx++;
+      if (idx < p_data.length)
+        setTimeout(function () { part_pass() }, 10);
+      else last_step();
+    };
+    var last_step = function() {
+      overlay.par_data = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH);
+      gl.readPixels(0, 0, MAP_WIDTH, MAP_WIDTH, gl.RGBA, gl.UNSIGNED_BYTE, overlay.par_data);
+      draw_partition();
+      draw();
+      enable_ui(true);
+    };
+    
+    if (overlay.par_mode == OVR_PAR_RACES) {
+      var races = ["E", "H", "D", "O"];
+      for (var i=0; i<races.length; i++)
+        p_data.push(get_race_code(races[i]) / 255);
+    }
+    else if (overlay.par_mode == OVR_PAR_ALLIANCES)
+      for (var i=0; i<data.alliances.length; i++)
+        p_data.push(data.alliances[i].index / 255);
+    part_pass();
+  }
+}
+
+function draw_gauss_h(filter) {
+  gl.useProgram(shaders.gauss_h);
+  fbs.idx.g = -1;
+  fbs.idx.g_prev = -1;
+
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, textures.towns);
+  gl.uniform1i(shaders.gauss_h.sampler_towns, 2);
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, textures.pids);
+  gl.uniform1i(shaders.gauss_h.sampler_pids, 3);
+
+  gl.uniform1f(shaders.gauss_h.filter, filter);
+  
+  var more = true, idx = 0;
+  while (more) {
+    var fb = fbs.next_fb();
+    textures.bind_g_sampler(shaders.gauss_h.sampler_prev, fbs.find_dummy_idx(fbs.idx.g_prev));
+    gl.uniform1i(shaders.gauss_h.use_sampler_prev, idx > 0);
+    more = upload_kernel(shaders.gauss_h, idx);
+    draw_overlay_main(fb, shaders.gauss_h, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
+    idx += KERNEL_UNIFORM_SIZE;
+  }
+  
+  fbs.idx.g_h = fbs.idx.g;
+}
+
+function draw_gauss_v(filter, compare) {
+  gl.useProgram(shaders.gauss_v);
+  fbs.idx.g_prev = -1;
+
+  textures.bind_g_sampler(shaders.gauss_v.sampler_gauss_h, fbs.idx.g_h);
+  textures.bind_g_sampler(shaders.gauss_v.sampler_comp, fbs.find_dummy_idx(fbs.idx.g_v));
+  
+  gl.uniform1f(shaders.gauss_v.filter, filter);
+  
+  var more = true, idx = 0;
+  while (more) {
+    var fb = fbs.next_fb();
+    textures.bind_g_sampler(shaders.gauss_v.sampler_prev, fbs.find_dummy_idx(fbs.idx.g_prev));
+    gl.uniform1i(shaders.gauss_v.use_sampler_prev, idx > 0);
+    more = upload_kernel(shaders.gauss_v, idx);
+    gl.uniform1f(shaders.gauss_v.compare, compare && !more);
+    draw_overlay_main(fb, shaders.gauss_v, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
+    idx += KERNEL_UNIFORM_SIZE;
+  }
+  
+  fbs.idx.g_v = fbs.idx.g;
+}
+
+function draw_max_h() {
+  gl.useProgram(shaders.max_h);
+  
+  textures.bind_g_sampler(shaders.max_h.sampler, fbs.idx.g_v);
+  
+  draw_overlay_main(fbs.max_h, shaders.max_h, buffers.max_h_pos, MAP_WIDTH / 10, MAP_WIDTH);
+}
+
+function draw_max_v() {
+  gl.useProgram(shaders.max_v);
+
+  gl.activeTexture(gl.TEXTURE4);
+  gl.bindTexture(gl.TEXTURE_2D, textures.max_h);
+  gl.uniform1i(shaders.max_v.sampler, 4);
+  
+  draw_overlay_main(fbs.max_v, shaders.max_v, buffers.max_v_pos, MAP_WIDTH / 10, MAP_WIDTH / 10);
+  
+  var pixels = new Uint8Array(4 * MAP_WIDTH * MAP_WIDTH / 100);
+  gl.readPixels(0, 0, MAP_WIDTH / 10, MAP_WIDTH / 10, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  var max_val = 0;
+  for (var i=0; i<pixels.length; i+=4) {
+    var val1 = 256 * pixels[i] + pixels[i + 1];
+    var val2 = 256 * pixels[i + 2] + pixels[i + 3];
+    var val = val1 + val2 / 65536;
+    if (val > max_val)
+      max_val = val;
+  }
+  return max_val;
+}
+
+function draw_heat(max_value) {
+  gl.useProgram(shaders.heat);
+
+  textures.bind_g_sampler(shaders.heat.sampler, fbs.idx.g_v);
+  gl.uniform1f(shaders.heat.max_value, max_value);
+  gl.uniform1f(shaders.heat.gamma, overlay.gamma);
+  
+  draw_overlay_main(fbs.overlay_out, shaders.heat, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
+}
+
+function draw_partition() {
+  gl.useProgram(shaders.partition);
+  
+  textures.bind_g_sampler(shaders.partition.sampler, fbs.idx.g_v);
+  for (var i=0; i<PAR_COLORS.length; i++) {
+    var c = PAR_COLORS[i];
+    gl.uniform3f(shaders.partition.par_colors[i], c[0] / 255, c[1] / 255, c[2] / 255);
+  }
+  gl.uniform1f(shaders.partition.sel_par, map_state.sel_par / 255);
+  gl.uniform1i(shaders.partition.races_mode, overlay.par_mode == OVR_PAR_RACES);
+  
+  draw_overlay_main(fbs.overlay_out, shaders.partition, buffers.map_pos, MAP_WIDTH, MAP_WIDTH);
+}
+
+// draw overlay utils
+
+function draw_overlay_main(fb, shader, vtx_buffer, width, height) {
+  mat4.ortho(0, width, 0, height, 0, 10, p_mat);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.disable(gl.BLEND);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.uniformMatrix4fv(shader.mv_mat, false, mv_mat);
+  gl.uniformMatrix4fv(shader.p_mat, false, p_mat);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vtx_buffer);
+  gl.vertexAttribPointer(shader.a_vtx_pos, vtx_buffer.itemSize, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffers.tex_pos);
+  gl.vertexAttribPointer(shader.a_tex_pos, buffers.tex_pos.itemSize, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, vtx_buffer.numItems);
+}
+
+function upload_kernel(shader, idx) {
+  var kernel = null;
+  for (var i=0; i<overlay.kernels.length; i++)
+    if (overlay.kernels[i].std_dev == overlay.std_dev) {
+      kernel = overlay.kernels[i].buffer;
+      break;
+    }
+  var half = Math.floor(kernel.length / 2);
+  var start_index = idx - half;
+  var end_index = start_index + KERNEL_UNIFORM_SIZE - 1;
+  if (end_index + half >= kernel.length)
+    end_index = kernel.length - half - 1;
+  gl.uniform1i(shader.start_index, start_index);
+  gl.uniform1i(shader.end_index, end_index);
+  for (var i=0; i<end_index - start_index + 1; i++)
+    gl.uniform1f(shader.kernel[i], kernel[idx + i]);
+  return idx + KERNEL_UNIFORM_SIZE < kernel.length;
+}
+
+
+
+
+
+
+
+// events *********************************************************************
 
 function map_mousemove(event) {
   var old_sel_cap = map_state.sel_cap;
@@ -668,6 +826,7 @@ function map_mousemove(event) {
   illyy = illyy.replace(/ /g, "&nbsp;");
   $("#pos_info").html("[" + illyx + ":" + illyy + "]");
   $("#pos_info").show();
+  if (!map_state.ui_enabled) return;
   if ($("#show_capitals").is(':checked'))
     for (var i=0; i<capitals.length; i++) {
         var town = capitals[i];
@@ -680,8 +839,7 @@ function map_mousemove(event) {
         }
     }
   if (overlay.mode == OVR_PAR && overlay.par_data) {
-    var idx = 4 * (map_state.my * MAP_WIDTH + map_state.mx) + 2;
-    if (overlay.par_mode == OVR_PAR_RACES) idx++;
+    var idx = 4 * (map_state.my * MAP_WIDTH + map_state.mx) + 1;
     map_state.sel_par = overlay.par_data[idx];
   }
   if (map_state.sel_cap != old_sel_cap || map_state.sel_par != old_sel_par) {
@@ -736,7 +894,7 @@ function map_mousemove(event) {
       }).show();
     }
     if (map_state.sel_par != old_sel_par)
-      draw_par_last();
+      draw_partition();
     draw();
   }
 }
@@ -746,8 +904,10 @@ function map_mouseout(event) {
   $("#infobox").hide();
   if (map_state.sel_par > 0) {
     map_state.sel_par = 0;
-    draw_par_last();
-    draw();
+    if (map_state.ui_enabled) {
+      draw_partition();
+      draw();
+    }
   }
 }
 
@@ -755,6 +915,119 @@ function map_dblclick(event) {
   var x = (event.pageX - this.offsetLeft) * 2 - MAP_WIDTH;
   var y = MAP_WIDTH - (event.pageY - this.offsetTop) * 2;
   window.open(ILLY_MAP_URL.replace("{x}", x).replace("{y}", y), '_blank');
+}
+
+
+
+
+
+
+
+
+// utils *******************************************************************
+
+function enable_ui(en) {
+  map_state.ui_enabled = en;
+  var ui = ["overlay_mode", "std_dev", "gamma", "show_map", "show_towns", "show_capitals"];
+  for (var i=0; i<ui.length; i++) {
+    var el = $("#" + ui[i]);
+    if (en) el.removeAttr('disabled');
+    else el.attr('disabled', 'disabled');
+  }
+  if (!en) {
+    $("#infobox").html('<span class="chuggin">I\'M CHUGGIN GIGABYTES<br />wait a sec...</span>');
+    var pos = $("#map").position();
+    $("#infobox").css({
+        position: "absolute",
+        top: (pos.top + Math.floor(MAP_WIDTH / 2) - 200) + "px",
+        left: (pos.left + Math.floor(MAP_WIDTH / 2) - 150) + "px"
+    }).show();
+  }
+  else $("#infobox").hide();
+}
+
+function get_shader(gl, id) {
+  var shaderScript = $("#" + id)[0];
+  if (!shaderScript) return null;
+  var str = "";
+  var k = shaderScript.firstChild;
+  while (k) {
+    if (k.nodeType == 3)
+      str += k.textContent;
+    k = k.nextSibling;
+  }
+  str = str.replace(/{KERNEL_UNIFORM_SIZE}/g, KERNEL_UNIFORM_SIZE);
+  var shader;
+  if (shaderScript.type == "x-shader/x-fragment")
+    shader = gl.createShader(gl.FRAGMENT_SHADER);
+  else if (shaderScript.type == "x-shader/x-vertex")
+    shader = gl.createShader(gl.VERTEX_SHADER);
+  else return null;
+  gl.shaderSource(shader, str);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      alert(gl.getShaderInfoLog(shader));
+      return null;
+  }
+  return shader;
+}
+
+function attach_tex_to_fb(width, height, type, el_type) {
+  var tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, type, width, height, 0, type, el_type, null);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  if (type == gl.FLOAT && gl.checkFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE)
+     alert("Error: browser rejected FLOAT as the color attachment to an FBO");
+  return tex;
+}
+
+function get_town_pos(town, is_selected) {
+  var r = Math.floor(Math.sqrt(town.p / 50));
+  if (is_selected) r *= 1.5;
+  if (r < 4) r = 4;
+  var x = town.x1 - r, y = town.y1 - r;
+  return { x: x, y: y, scale: 2 * r }
+}
+
+function get_race_code(race_str) {
+  if (race_str == "E") return 1;
+  else if (race_str == "H") return 2;
+  else if (race_str == "D") return 3;
+  else if (race_str == "O") return 4;
+  return 0;
+}
+
+function get_race_name(race_code) {
+  if (race_code == 1) return "Elves";
+  else if (race_code == 2) return "Humans";
+  else if (race_code == 3) return "Dwarves";
+  else if (race_code == 4) return "Orcs";
+  return "?";
+}
+
+function alliance_by_id(id) {
+  for (var i=0; i<data.alliances.length; i++) {
+    var a = data.alliances[i];
+    if (a.id == id) return a;
+  }
+  return null;
+}
+
+function add_commas(str) {
+  str += '';
+  var x = str.split('.');
+  var x1 = x[0];
+  var x2 = x.length > 1 ? '.' + x[1] : '';
+  var rgx = /(\d+)(\d{3})/;
+  while (rgx.test(x1)) {
+    x1 = x1.replace(rgx, '$1' + ',' + '$2');
+  }
+  return x1 + x2;
 }
 
 // converts xml files from Illyriad (~17MB) to a more compact json (~1.3MB)
@@ -836,123 +1109,4 @@ function loadXml() {
       if (al_loaded) generateJson();
     }
   });
-}
-
-
-
-
-
-
-// utils *******************************************************************
-
-function get_shader(gl, id) {
-  var shaderScript = $("#" + id)[0];
-  if (!shaderScript) return null;
-  var str = "";
-  var k = shaderScript.firstChild;
-  while (k) {
-    if (k.nodeType == 3)
-      str += k.textContent;
-    k = k.nextSibling;
-  }
-  var shader;
-  if (shaderScript.type == "x-shader/x-fragment")
-    shader = gl.createShader(gl.FRAGMENT_SHADER);
-  else if (shaderScript.type == "x-shader/x-vertex")
-    shader = gl.createShader(gl.VERTEX_SHADER);
-  else return null;
-  gl.shaderSource(shader, str);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      alert(gl.getShaderInfoLog(shader));
-      return null;
-  }
-  return shader;
-}
-
-function get_race_code(race_str) {
-  if (race_str == "E") return 1;
-  else if (race_str == "H") return 2;
-  else if (race_str == "D") return 3;
-  else if (race_str == "O") return 4;
-  return 0;
-}
-
-function get_race_name(race_code) {
-  if (race_code == 1) return "Elves";
-  else if (race_code == 2) return "Humans";
-  else if (race_code == 3) return "Dwarves";
-  else if (race_code == 4) return "Orcs";
-  return "?";
-}
-
-function alliance_by_id(id) {
-  for (var i=0; i<data.alliances.length; i++) {
-    var a = data.alliances[i];
-    if (a.id == id) return a;
-  }
-  return null;
-}
-
-function confed_has_alliance(conf, a) {
-  for (var k=0; k<conf.alliances.length; k++)
-    if (conf.alliances[k] == a)
-      return true;
-  return false;
-}
-
-function half2float(b0, b1) {
-  var s = (Math.floor(b0 / 128) == 0 ? 1 : -1);
-  if (s == -1) b0 -= 128;
-  var e = Math.floor(b0 / 4);
-  b0 -= e * 4;
-  var m = b0 * 256 + b1;
-  if (e > 0 && e < 31)
-    return s * Math.pow(2, e - 15) * (1 + m / 1024);
-  else if (e == 0 && m == 0)
-    return 0;
-  else if (e == 0 && m != 0)
-    return s * 6.1035 * (m / 1024) * 0.00001;
-  else if (e == 31 && m == 0)
-    return (s == 1 ? Number.POSITIVE_INFINITY : Number.NEGATIVE_INFINITY);
-  return Number.NaN;
-}
-
-function float2half(c) {
-  var s = 0;
-  if (c < 0) {
-    s = 1;
-    c *= -1;
-  }
-  if (c > 65504) return (s == 0 ? [124, 0] : [252, 0]); //INF
-  if (c == 0) return [0, 0];
-  var m, e, ve;
-  if (c < 0.0000610352) { // subnormal; 0.0000610352 = 2^-14
-    e = 0;
-    m = c * 16777216;     // 16777216.0 = 2^24
-  }
-  else for (var i=-14; i<=15; i++) {
-    ve = Math.pow(2, i);
-    m = c / ve;
-    if (m < 2 && m >= 1) {
-      e = i + 15;
-      m = (m - 1) * 1024;
-      break;
-    }
-  }
-  var m0 = Math.floor(m / 256);
-  var m1 = Math.floor(m - m0 * 256);
-  return [s * 128 + e * 4 + m0, m1];
-}
-
-function add_commas(str) {
-  str += '';
-  var x = str.split('.');
-  var x1 = x[0];
-  var x2 = x.length > 1 ? '.' + x[1] : '';
-  var rgx = /(\d+)(\d{3})/;
-  while (rgx.test(x1)) {
-    x1 = x1.replace(rgx, '$1' + ',' + '$2');
-  }
-  return x1 + x2;
 }
