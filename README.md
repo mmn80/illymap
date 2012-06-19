@@ -9,8 +9,7 @@ Main website for the game: <http://www.illyriad.co.uk/>
 Requirements
 ------------
 
-Browser supporting the minimum WebGL spec. No extra WebGL extensions, but there should be at least 64MB of GPU memory for RTT stuff.
-There is also a 300 uniform array of (medium precision) floats that may cause problems on lower end GPUs / WebGL implementations.
+Browser supporting WebGL and the OES_texture_float extension. There should be at least 128MB of GPU memory.
 
 
 Data Files
@@ -32,7 +31,6 @@ Code
 This is my first GPGPU program and it's unoptimized in many ways.
 The javascript part is messy and the only good thing about it is that it works.
 There are plenty of Gaussian blur shaders on the net, but this one is more general in terms of sigma values and dynamic range.
-Data is encoded in half floats. There are half2float and float2half functions in both javascript and GLSL.
 The iterative compare-and-swap Gaussian partition implementation could also be useful in other apps.
 The false color converter is taken from <http://www.efg2.com/Lab/ScienceAndEngineering/Spectra.htm>.
 
