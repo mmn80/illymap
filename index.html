@@ -1,13 +1,13 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <title>Illymap - Illyriad Heat &amp; Partition Maps</title>
     <meta charset='utf-8' />
     <meta name="description" content="Illymap : Illyriad Heat & Partition Maps" />
     <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
     <script type="text/javascript" src="javascripts/jquery-1.7.2.min.js"></script>
     <script type="text/javascript" src="javascripts/gl-matrix-1.3.5-min.js"></script>
     <script type="text/javascript" src="javascripts/main.js"></script>
-
     <script id="main-vs" type="x-shader/x-vertex">
       attribute vec3 a_vtx_pos;
       attribute vec2 a_tex_pos;
@@ -22,7 +22,6 @@
         tex_pos = a_tex_pos;
       }
     </script>
-
     <script id="main-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -51,7 +50,6 @@
         gl_FragColor = col;
       }
     </script>
-
     <script id="overlay-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -63,7 +61,6 @@
         gl_FragColor = texture2D(sampler, tex_pos);
       }
     </script>
-
     <script id="stars-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -78,7 +75,6 @@
         gl_FragColor.a = smoothstep(0., 1., dot(gl_FragColor.rgb, vec3(.34, .5, .16)));
       }
     </script>
-
     <script id="gauss_h-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -116,7 +112,6 @@
         gl_FragColor = vec4(sum, 0., 0., 1.);
       }
     </script>
-
     <script id="gauss_v-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -153,7 +148,6 @@
         }
       }
     </script>
-
     <script id="max_h-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -181,7 +175,6 @@
         gl_FragColor = float2fixed(max_val);
       }
     </script>
-
     <script id="max_v-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -215,7 +208,6 @@
         gl_FragColor = float2fixed(max_val);
       }
     </script>
-
     <script id="heat-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -248,7 +240,6 @@
         gl_FragColor = val2rgb(texture2D(sampler, tex_pos).r, max_value);
       }
     </script>
-
     <script id="partition-fs" type="x-shader/x-fragment">
       precision mediump float;
 
@@ -304,8 +295,8 @@
         gl_FragColor = vec4(color, .5);
       }
     </script>
-
     <script type="text/javascript">
+
       var _gaq = _gaq || [];
       _gaq.push(['_setAccount', 'UA-32836549-1']);
       _gaq.push(['_trackPageview']);
@@ -315,9 +306,8 @@
         ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
         var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
       })();
-    </script>
 
-    <title>Illymap - Illyriad Heat &amp; Partition Maps</title>
+    </script>
   </head>
 
   <body>
@@ -390,9 +380,13 @@
 
     <div class="outer">
       <footer class="inner">
-        <p>&copy; 2012 by The Interwebs</p>
-        <p><a href="https://github.com/clnx/illymap" target="_blank">Project</a> hosted on GitHub</p>
-        <br />
+        <div id="footer_left">
+          <p>&copy; 2012 by The Interwebs</p>
+          <p><a href="https://github.com/clnx/illymap" target="_blank">Project</a> hosted on GitHub</p>
+        </div>
+        <div id="webgl_logo">
+          <a href="http://get.webgl.org/" target="_blank"><img src="images/WebGL_logo.png" title="This page uses WebGL for computing and rendering" style="width:163px; height:75px;" /></a>
+        </div>
       </footer>
     </div>
   </body>
