@@ -3,3 +3,4 @@ node_modules/*
 server.js
 javascripts/gl-matrix.js
 data/data_*
+.session.vim
